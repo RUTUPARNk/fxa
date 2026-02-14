@@ -35,7 +35,6 @@ export type SigninTotpCodeProps = {
   integration: SigninIntegration;
   redirectTo?: string;
   signinState: SigninLocationState;
-  // TODO: Switch to gql error shaped object
   submitTotpCode: (totpCode: string) => Promise<{ error?: HandledError }>;
   serviceName?: MozServices;
   setCurrentSplitLayout?: (value: boolean) => void;
@@ -132,6 +131,7 @@ export const SigninTotpCode = ({
         uid,
         // Update verification status of stored current account
         verified: true,
+        sessionVerified: true,
       });
 
       const navigationOptions = {
@@ -167,7 +167,8 @@ export const SigninTotpCode = ({
   const cmsInfo = integration.getCmsInfo();
   const title = cmsInfo?.SigninTotpCodePage?.pageTitle;
   const splitLayout = cmsInfo?.SigninTotpCodePage?.splitLayout;
-
+  const additionalAccessibilityInfo =
+    cmsInfo?.shared.additionalAccessibilityInfo;
   return (
     <AppLayout {...{ cmsInfo, title, splitLayout, setCurrentSplitLayout }}>
       {cmsInfo ? (
@@ -210,13 +211,8 @@ export const SigninTotpCode = ({
         </FtlMsg>
       </div>
 
-      {integration.isFirefoxClientServiceRelay() && (
-        <FtlMsg id="signin-totp-code-desktop-relay">
-          <p className="mt-2 mb-4 text-sm">
-            Firefox will try sending you back to use an email mask after you
-            sign in.
-          </p>
-        </FtlMsg>
+      {additionalAccessibilityInfo && (
+        <p className="mt-2 mb-4 text-sm">{additionalAccessibilityInfo}</p>
       )}
 
       {bannerError && (

@@ -5,7 +5,11 @@ import Emittery from 'emittery';
 import { ProductConfigurationManager } from '@fxa/shared/cms';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { CartManager, TaxChangeAllowedStatus } from '@fxa/payments/cart';
-import { PaymentsGleanManager } from '@fxa/payments/metrics';
+import {
+  PaymentsGleanManager,
+  type GenericGleanSubManageEvent,
+  PaymentsGleanService,
+} from '@fxa/payments/metrics';
 import { LocationStatus } from '@fxa/payments/eligibility';
 import {
   CheckoutEvents,
@@ -16,18 +20,18 @@ import {
   type AuthEvents,
 } from './emitter.types';
 import { AccountManager } from '@fxa/shared/account/account';
-import { retrieveAdditionalMetricsData } from './util/retrieveAdditionalMetricsData';
 import {
   getSubplatInterval,
   CustomerManager,
   SubscriptionManager,
   PaymentMethodManager,
-  type SubPlatPaymentMethodType,
+  PaymentProvidersType,
 } from '@fxa/payments/customer';
 import * as Sentry from '@sentry/nestjs';
 import { StatsD, StatsDService } from '@fxa/shared/metrics/statsd';
 import { EmitterServiceHandleAuthError } from './emitter.error';
 import { NimbusManager } from '@fxa/payments/experiments';
+import { retrieveAdditionalMetricsData } from './util/retrieveAdditionalMetricsData';
 
 @Injectable()
 export class PaymentsEmitterService {
@@ -40,6 +44,7 @@ export class PaymentsEmitterService {
     private log: Logger,
     private nimbusManager: NimbusManager,
     private paymentsGleanManager: PaymentsGleanManager,
+    private paymentsGleanService: PaymentsGleanService,
     private paymentMethodManager: PaymentMethodManager,
     private productConfigurationManager: ProductConfigurationManager,
     @Inject(StatsDService) public statsd: StatsD,
@@ -58,6 +63,10 @@ export class PaymentsEmitterService {
     this.emitter.on('sp3Rollout', this.handleSP3Rollout.bind(this));
     this.emitter.on('locationView', this.handleLocationView.bind(this));
     this.emitter.on('auth', this.handleAuthEvent.bind(this));
+    this.emitter.on(
+      'genericGleanSubManageEvent',
+      this.handleGenericSubManageGleanEvent.bind(this)
+    );
   }
 
   getEmitter(): Emittery<PaymentsEmitterEvents> {
@@ -217,8 +226,8 @@ export class PaymentsEmitterService {
           eventData?.searchParams?.['experimentationPreview'] === 'true',
       });
 
-      // Determine payment method type
-      let paymentMethodType: SubPlatPaymentMethodType | undefined;
+      // Determine payment provider
+      let paymentProvider: PaymentProvidersType | undefined;
       if (additionalData.cartMetricsData.stripeCustomerId) {
         const { stripeCustomerId } = additionalData.cartMetricsData;
         const customer = await this.customerManager.retrieve(stripeCustomerId);
@@ -231,7 +240,7 @@ export class PaymentsEmitterService {
           );
 
         if (paymentMethodTypeResponse?.type) {
-          paymentMethodType = paymentMethodTypeResponse.type;
+          paymentProvider = paymentMethodTypeResponse.provider;
         }
       }
 
@@ -241,9 +250,15 @@ export class PaymentsEmitterService {
           ...additionalData,
           experimentationData: { nimbusUserId },
         },
-        paymentMethodType
+        paymentProvider
       );
     }
+  }
+
+  async handleGenericSubManageGleanEvent(
+    eventData: GenericGleanSubManageEvent
+  ) {
+    await this.paymentsGleanService.recordGenericSubManageEvent(eventData);
   }
 
   async handleCheckoutFail(eventData: CheckoutPaymentEvents) {

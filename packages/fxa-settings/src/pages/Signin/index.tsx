@@ -7,7 +7,7 @@ import { useNavigateWithQuery } from '../../lib/hooks/useNavigateWithQuery';
 import classNames from 'classnames';
 import LoadingSpinner from 'fxa-react/components/LoadingSpinner';
 import { FtlMsg } from 'fxa-react/lib/utils';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import AppLayout from '../../components/AppLayout';
 import CardHeader from '../../components/CardHeader';
@@ -56,7 +56,6 @@ const Signin = ({
   finishOAuthFlowHandler,
   localizedSuccessBannerHeading,
   localizedSuccessBannerDescription,
-  deeplink,
   flowQueryParams,
   useFxAStatusResult: { supportsKeysOptionalLogin },
   setCurrentSplitLayout,
@@ -84,22 +83,22 @@ const Signin = ({
 
   const isOAuth = isOAuthIntegration(integration);
   const isOAuthNative = isOAuthNativeIntegration(integration);
-  const isFirefoxClientServiceRelay = integration.isFirefoxClientServiceRelay();
   const clientId = integration.getClientId();
   const hasLinkedAccountAndNoPassword = hasLinkedAccount && !hasPassword;
 
   const legalTerms = integration.getLegalTerms();
 
-  const isDeeplinking = !!deeplink;
   const isServiceWithEmailVerification =
     !!clientId && config.servicesWithEmailVerification.includes(clientId);
 
-  // We must use a ref because we may update this value in a callback
-  let isPasswordNeededRef = useRef(
-    (!sessionToken && hasPassword) ||
+  const [hasCachedAccount, setHasCachedAccount] =
+    useState<boolean>(!!sessionToken);
+
+  const isPasswordNeeded =
+    ((!hasCachedAccount && hasPassword) ||
       integration.wantsKeys() ||
-      (isOAuth && integration.wantsLogin())
-  );
+      (isOAuth && integration.wantsLogin())) &&
+    !(hasCachedAccount && supportsKeysOptionalLogin);
 
   const localizedPasswordFormLabel = ftlMsgResolver.getMsg(
     'signin-password-button-label',
@@ -129,7 +128,7 @@ const Signin = ({
     : isOAuthNative && !supportsKeysOptionalLogin;
 
   useEffect(() => {
-    if (!isPasswordNeededRef.current) {
+    if (!isPasswordNeeded) {
       GleanMetrics.cachedLogin.view({
         event: { thirdPartyLinks: !hideThirdPartyAuth },
       });
@@ -138,7 +137,7 @@ const Signin = ({
         event: { thirdPartyLinks: !hideThirdPartyAuth },
       });
     }
-  }, [isPasswordNeededRef, hideThirdPartyAuth]);
+  }, [isPasswordNeeded, hideThirdPartyAuth]);
 
   const signInWithCachedAccount = useCallback(
     async (sessionToken: hexstring) => {
@@ -169,6 +168,8 @@ const Signin = ({
           queryParams: location.search,
           performNavigation: !integration.isFirefoxMobileClient(),
           isServiceWithEmailVerification,
+          handleFxaLogin: true,
+          handleFxaOAuthLogin: true,
         };
 
         const { error: navError } = await handleNavigation(navigationOptions);
@@ -183,7 +184,7 @@ const Signin = ({
           getLocalizedErrorMessage(ftlMsgResolver, error)
         );
         if (error.errno === AuthUiErrors.SESSION_EXPIRED.errno) {
-          isPasswordNeededRef.current = true;
+          setHasCachedAccount(false);
         }
         setSigninLoading(false);
       }
@@ -277,8 +278,7 @@ const Signin = ({
               navigateWithQuery('/signin_unblock', {
                 state: {
                   email,
-                  // TODO: in FXA-9177, remove hasLinkedAccount and hasPassword from state
-                  // will be stored in Apollo cache at the container level
+                  // TODO: in FXA-9177, consider persisting hasLinkedAccount and hasPassword to localStorage
                   hasPassword,
                   hasLinkedAccount,
                 },
@@ -341,39 +341,29 @@ const Signin = ({
 
   const onSubmit = useCallback(
     async ({ password }: { password: string }) => {
-      if (isPasswordNeededRef.current && password === '') {
+      if (isPasswordNeeded && password === '') {
         setPasswordTooltipErrorText(localizedValidPasswordError);
         return;
       }
 
-      !isPasswordNeededRef.current && sessionToken
+      !isPasswordNeeded && sessionToken
         ? signInWithCachedAccount(sessionToken)
         : signInWithPassword(password);
     },
     [
       signInWithCachedAccount,
       signInWithPassword,
-      isPasswordNeededRef,
+      isPasswordNeeded,
       localizedValidPasswordError,
       sessionToken,
     ]
   );
 
-  if (isDeeplinking) {
-    // To avoid flickering, we only render third party auth and navigate
-    return (
-      <ThirdPartyAuth
-        showSeparator={false}
-        viewName="deeplink"
-        deeplink={deeplink}
-        flowQueryParams={flowQueryParams}
-      />
-    );
-  }
-
   const cmsInfo = integration.getCmsInfo();
   const title = cmsInfo?.SigninPage.pageTitle;
   const splitLayout = cmsInfo?.SigninPage.splitLayout;
+  const additionalAccessibilityInfo =
+    cmsInfo?.shared.additionalAccessibilityInfo;
 
   return (
     <AppLayout {...{ cmsInfo, title, splitLayout, setCurrentSplitLayout }}>
@@ -386,7 +376,7 @@ const Signin = ({
           }}
         />
       )}
-      {isPasswordNeededRef.current && hasPassword ? (
+      {isPasswordNeeded && hasPassword ? (
         <CardHeader
           headingText="Enter your password"
           headingAndSubheadingFtlId="signin-password-needed-header-2"
@@ -395,6 +385,8 @@ const Signin = ({
             cmsLogoAltText: cmsInfo?.shared.logoAltText,
             cmsHeadline: cmsInfo?.SigninPage.headline,
             cmsDescription: cmsInfo?.SigninPage.description,
+            cmsHeadlineFontSize: cmsInfo?.shared.headlineFontSize,
+            cmsHeadlineTextColor: cmsInfo?.shared.headlineTextColor,
           }}
         />
       ) : (
@@ -408,6 +400,8 @@ const Signin = ({
             serviceName,
             cmsLogoUrl: cmsInfo?.shared.logoUrl,
             cmsLogoAltText: cmsInfo?.shared.logoAltText,
+            cmsHeadlineFontSize: cmsInfo?.shared.headlineFontSize,
+            cmsHeadlineTextColor: cmsInfo?.shared.headlineTextColor,
           }}
         />
       )}
@@ -446,20 +440,16 @@ const Signin = ({
           </div>
         </div>
 
-        {isFirefoxClientServiceRelay && (
-          <FtlMsg id="signin-desktop-relay">
-            <p className="mt-6 mb-4 text-sm">
-              Firefox will try sending you back to use an email mask after you
-              sign in.
-            </p>
-          </FtlMsg>
+        {additionalAccessibilityInfo && (
+          <p className="mt-6 mb-4 text-sm">{additionalAccessibilityInfo}</p>
         )}
       </div>
-      {!hasLinkedAccountAndNoPassword && (
+      {(!hasLinkedAccountAndNoPassword ||
+        (hasCachedAccount && supportsKeysOptionalLogin)) && (
         <form onSubmit={handleSubmit(onSubmit)}>
           <input type="email" className="hidden" value={email} disabled />
 
-          {isPasswordNeededRef.current && (
+          {isPasswordNeeded && (
             <InputPassword
               name="password"
               anchorPosition="start"
@@ -496,7 +486,6 @@ const Signin = ({
           <div className="flex">
             <FtlMsg id="signin-button">
               <CmsButtonWithFallback
-                className="cta-primary cta-xl"
                 type="submit"
                 disabled={signinLoading}
                 buttonColor={cmsInfo?.shared.buttonColor}
@@ -552,7 +541,7 @@ const Signin = ({
               }`}
               className="text-sm link-blue mx-auto tablet:mx-0"
               onClick={() =>
-                !isPasswordNeededRef.current
+                !isPasswordNeeded
                   ? GleanMetrics.cachedLogin.forgotPassword()
                   : GleanMetrics.login.forgotPassword()
               }

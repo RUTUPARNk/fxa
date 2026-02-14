@@ -33,7 +33,6 @@ export interface SignupProps {
   email: string;
   beginSignupHandler: BeginSignupHandler;
   useFxAStatusResult: UseFxAStatusResult;
-  deeplink?: string;
   flowQueryParams?: QueryParams;
   isMobile: boolean;
   setCurrentSplitLayout?: (value: boolean) => void;
@@ -49,7 +48,7 @@ export type SignupOAuthIntegration = Pick<
   | 'saveOAuthState'
   | 'getService'
   | 'isFirefoxClientServiceRelay'
-  | 'isFirefoxClientServiceAiWindow'
+  | 'isFirefoxClientServiceSmartWindow'
   | 'isFirefoxNonSync'
   | 'getWebChannelServices'
   | 'wantsKeys'
@@ -64,7 +63,7 @@ export type SignupBaseIntegration = Pick<
   | 'isSync'
   | 'getService'
   | 'isFirefoxClientServiceRelay'
-  | 'isFirefoxClientServiceAiWindow'
+  | 'isFirefoxClientServiceSmartWindow'
   | 'isFirefoxNonSync'
   | 'getWebChannelServices'
   | 'wantsKeys'

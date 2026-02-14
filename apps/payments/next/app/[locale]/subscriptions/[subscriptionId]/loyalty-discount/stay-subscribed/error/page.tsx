@@ -19,6 +19,11 @@ export default async function LoyaltyDiscountStaySubscribedErrorPage({
   searchParams: Record<string, string> | undefined;
 }) {
   const { locale, subscriptionId } = params;
+
+  if (!config.churnInterventionConfig.enabled) {
+    redirect(`/${locale}/subscriptions/${subscriptionId}/stay-subscribed`);
+  }
+
   const acceptLanguage = headers().get('accept-language');
 
   const session = await auth();
@@ -27,6 +32,10 @@ export default async function LoyaltyDiscountStaySubscribedErrorPage({
       `${config.paymentsNextHostedUrl}/${locale}/subscriptions/landing`
     );
     redirectToUrl.search = new URLSearchParams(searchParams).toString();
+    redirectToUrl.searchParams.set(
+      'redirect_to',
+      `/${locale}/subscriptions/${subscriptionId}/loyalty-discount/stay-subscribed/error`
+    );
     redirect(redirectToUrl.href);
   }
 
@@ -42,15 +51,15 @@ export default async function LoyaltyDiscountStaySubscribedErrorPage({
     notFound();
   }
 
-  const { cmsOfferingContent, reason } = pageContent;
-
-  if (!cmsOfferingContent) {
-    notFound();
+  const { churnStaySubscribedEligibility } = pageContent;
+  if (churnStaySubscribedEligibility.isEligible) {
+    redirect(
+      `/${locale}/subscriptions/${subscriptionId}/loyalty-discount/stay-subscribed`
+    );
   }
 
-  const staySubscribedContent = pageContent.staySubscribedContent;
-
-  if (staySubscribedContent.flowType !== 'stay_subscribed') {
+  const { cmsOfferingContent, reason } = churnStaySubscribedEligibility;
+  if (!cmsOfferingContent) {
     notFound();
   }
 
@@ -59,7 +68,7 @@ export default async function LoyaltyDiscountStaySubscribedErrorPage({
       cmsOfferingContent={cmsOfferingContent}
       locale={locale}
       reason={reason}
-      pageContent={staySubscribedContent}
+      pageContent={pageContent.staySubscribedContent}
       subscriptionId={subscriptionId}
     />
   );

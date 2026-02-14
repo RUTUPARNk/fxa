@@ -8,7 +8,10 @@ import { isEmailMask } from 'fxa-shared/email/helpers';
 import { useCallback, useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import AppLayout from '../../components/AppLayout';
-import CardHeader from '../../components/CardHeader';
+import CardHeader, {
+  getCmsHeadlineClassName,
+  getCmsHeadlineStyle,
+} from '../../components/CardHeader';
 import TermsPrivacyAgreement from '../../components/TermsPrivacyAgreement';
 import ThirdPartyAuth from '../../components/ThirdPartyAuth';
 import { REACT_ENTRYPOINT } from '../../constants';
@@ -50,7 +53,6 @@ export const Signup = ({
     selectedEnginesForGlean,
     supportsKeysOptionalLogin,
   },
-  deeplink,
   flowQueryParams,
   isMobile,
   setCurrentSplitLayout,
@@ -142,7 +144,9 @@ export const Signup = ({
           lastLogin: Date.now(),
           sessionToken: data.signUp.sessionToken,
           verified: false,
+          sessionVerified: false,
           metricsEnabled: true,
+          hasPassword: true,
         };
 
         // Persist account data to local storage to match parity with content-server
@@ -227,19 +231,6 @@ export const Signup = ({
     ]
   );
 
-  const isDeeplinking = !!deeplink;
-  if (isDeeplinking) {
-    // To avoid flickering, we only render third party auth and navigate
-    return (
-      <ThirdPartyAuth
-        showSeparator={false}
-        viewName="deeplink"
-        deeplink={deeplink}
-        flowQueryParams={flowQueryParams}
-      />
-    );
-  }
-
   const cmsInfo = integration.getCmsInfo();
   const title = cmsInfo?.SignupSetPasswordPage?.pageTitle;
   const splitLayout = cmsInfo?.SignupSetPasswordPage?.splitLayout;
@@ -259,7 +250,10 @@ export const Signup = ({
                 : 'left',
             }}
           />
-          <h1 className="card-header">
+          <h1
+            className={getCmsHeadlineClassName(cmsInfo.shared.headlineFontSize)}
+            style={getCmsHeadlineStyle(cmsInfo.shared.headlineTextColor)}
+          >
             {cmsInfo.SignupSetPasswordPage.headline}
           </h1>
           <p className="mt-1 text-sm">

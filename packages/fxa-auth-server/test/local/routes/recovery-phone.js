@@ -34,6 +34,8 @@ describe('/recovery_phone', () => {
   const mockDb = mocks.mockDB({ uid: uid, email: email });
   const mockLog = mocks.mockLog();
   let mockMailer;
+  let mockFxaMailer;
+
   const mockCustoms = {
     check: sandbox.fake(),
     checkAuthenticated: sandbox.fake(),
@@ -93,6 +95,7 @@ describe('/recovery_phone', () => {
     Container.set(AccountManager, mockAccountManager);
     Container.set(AccountEventsManager, mockAccountEventsManager);
     mockMailer = mocks.mockMailer();
+    mockFxaMailer = mocks.mockFxaMailer();
     // Ensure RecoveryPhoneHandler resolves OtpUtils with our mocked db/statsd
     otpUtils = new OtpUtils(mockDb, mockStatsd);
     Container.set(OtpUtils, otpUtils);
@@ -529,7 +532,7 @@ describe('/recovery_phone', () => {
         code
       );
       assert.equal(mockGlean.twoStepAuthPhoneCode.complete.callCount, 1);
-      assert.calledOnce(mockMailer.sendPostAddRecoveryPhoneEmail);
+      assert.calledOnce(mockFxaMailer.sendPostAddRecoveryPhoneEmail);
       assert.calledOnceWithExactly(
         mockAccountEventsManager.recordSecurityEvent,
         mockDb,
@@ -590,6 +593,7 @@ describe('/recovery_phone', () => {
       );
       assert.equal(mockGlean.twoStepAuthPhoneCode.complete.callCount, 1);
       assert.notCalled(mockMailer.sendPostAddRecoveryPhoneEmail);
+      assert.notCalled(mockFxaMailer.sendPostAddRecoveryPhoneEmail);
     });
 
     it('indicates a failure confirming code', async () => {
@@ -607,7 +611,7 @@ describe('/recovery_phone', () => {
 
       await assert.isRejected(promise, 'Invalid or expired confirmation code');
       assert.equal(mockGlean.twoStepAuthPhoneCode.complete.callCount, 0);
-      assert.notCalled(mockMailer.sendPostAddRecoveryPhoneEmail);
+      assert.notCalled(mockFxaMailer.sendPostAddRecoveryPhoneEmail);
     });
 
     it('indicates an issue with the backend service', async () => {
@@ -627,119 +631,7 @@ describe('/recovery_phone', () => {
       await assert.isRejected(promise, 'System unavailable, try again soon');
 
       assert.equal(mockGlean.twoStepAuthPhoneCode.complete.callCount, 0);
-      assert.notCalled(mockMailer.sendPostAddRecoveryPhoneEmail);
-    });
-  });
-
-  describe('POST /recovery_phone/change', async () => {
-    beforeEach(() => {
-      // setup default mocks for a successful request. individual tests
-      // modify mocks as needed to "break" the request at the expected points.
-      mockRecoveryPhoneService.changePhoneNumber = sinon.fake.returns(true);
-      mockRecoveryPhoneService.setupPhoneNumber = sinon.fake.returns(true);
-      mockRecoveryPhoneService.hasConfirmed = sinon
-        .stub()
-        .onCall(0)
-        .returns({ exists: true }) // first call is for guard clause
-        .onCall(1)
-        .returns({ phoneNumber, nationalFormat }); // second call is for email, security, and response
-
-      mockRecoveryPhoneService.getNationalFormat =
-        sinon.fake.returns(nationalFormat);
-      mockRecoveryPhoneService.validateSetupCode = sinon.fake.returns(true);
-    });
-
-    it('replaces a recovery phone number', async () => {
-      const expectedSuccess = {
-        phoneNumber,
-        nationalFormat,
-        status: 'success',
-      };
-
-      const resp = await makeRequest({
-        method: 'POST',
-        path: '/recovery_phone/change',
-        credentials: { uid, email },
-        payload: { code },
-      });
-
-      assert.isDefined(resp);
-      assert.callCount(mockRecoveryPhoneService.changePhoneNumber, 1);
-      assert.calledOnce(mockGlean.twoStepAuthPhoneReplace.success);
-      assert.deepEqual(resp, expectedSuccess);
-    });
-
-    it('rejects if code is invalid', async () => {
-      mockRecoveryPhoneService.validateSetupCode = sinon.fake.returns(false);
-
-      try {
-        await makeRequest({
-          method: 'POST',
-          path: '/recovery_phone/change',
-          credentials: { uid, email },
-          payload: { code },
-        });
-      } catch (err) {
-        assert.instanceOf(err, AppError);
-        assert.equal(err.errno, 183);
-        assert.equal(err.message, 'Invalid or expired confirmation code');
-      }
-    });
-
-    it('rejects if there is an unexpected service error while removing phone', async () => {
-      mockRecoveryPhoneService.changePhoneNumber = sinon.fake.returns(
-        Promise.reject(new Error('BOOM'))
-      );
-      try {
-        await makeRequest({
-          method: 'POST',
-          path: '/recovery_phone/change',
-          credentials: { uid, email },
-          payload: { code },
-        });
-        throw new Error('Should not have succeeded');
-      } catch (err) {
-        assert.instanceOf(err, AppError);
-        assert.equal(err.errno, 203);
-        assert.equal(err.message, 'System unavailable, try again soon');
-      }
-    });
-
-    it('does not reject if removing phone is not successful and does not error', async () => {
-      mockRecoveryPhoneService.changePhoneNumber = sinon.fake.returns(false);
-
-      const response = await makeRequest({
-        method: 'POST',
-        path: '/recovery_phone/change',
-        credentials: { uid, email },
-        payload: { code },
-      });
-
-      assert.deepEqual(response, {
-        status: 'failure',
-      });
-    });
-
-    it('does not reject if email does not send', async () => {
-      mockMailer.sendPostChangeRecoveryPhoneEmail = sinon.fake.returns(
-        Promise.reject(new Error('BOOM'))
-      );
-
-      const resp = await makeRequest({
-        method: 'POST',
-        path: '/recovery_phone/change',
-        credentials: { uid, email },
-        payload: { code },
-      });
-
-      assert.isDefined(resp);
-      assert.calledOnce(mockMailer.sendPostChangeRecoveryPhoneEmail);
-      assert.deepEqual(resp, {
-        status: 'success',
-        phoneNumber,
-        nationalFormat,
-      });
-      assert.calledOnce(mockLog.trace);
+      assert.notCalled(mockFxaMailer.sendPostAddRecoveryPhoneEmail);
     });
   });
 
@@ -767,7 +659,7 @@ describe('/recovery_phone', () => {
       );
       assert.equal(mockAccountManager.verifySession.callCount, 1);
       assert.equal(mockGlean.login.recoveryPhoneSuccess.callCount, 1);
-      assert.calledOnce(mockMailer.sendPostSigninRecoveryPhoneEmail);
+      assert.calledOnce(mockFxaMailer.sendPostSigninRecoveryPhoneEmail);
       assert.calledOnceWithExactly(
         mockAccountEventsManager.recordSecurityEvent,
         mockDb,
@@ -890,7 +782,7 @@ describe('/recovery_phone', () => {
         mockStatsd.increment,
         'account.resetPassword.recoveryPhone.success'
       );
-      assert.calledOnce(mockMailer.sendPasswordResetRecoveryPhoneEmail);
+      assert.calledOnce(mockFxaMailer.sendPasswordResetRecoveryPhoneEmail);
     });
 
     it('fails confirms a code during signin', async () => {
@@ -947,7 +839,7 @@ describe('/recovery_phone', () => {
         uid
       );
       assert.equal(mockGlean.twoStepAuthPhoneRemove.success.callCount, 1);
-      assert.calledOnce(mockMailer.sendPostRemoveRecoveryPhoneEmail);
+      assert.calledOnce(mockFxaMailer.sendPostRemoveRecoveryPhoneEmail);
       assert.calledOnceWithExactly(
         mockAccountEventsManager.recordSecurityEvent,
         mockDb,
@@ -986,7 +878,7 @@ describe('/recovery_phone', () => {
 
       await assert.isRejected(promise, 'System unavailable, try again soon');
       assert.equal(mockGlean.twoStepAuthPhoneRemove.success.callCount, 0);
-      assert.notCalled(mockMailer.sendPostRemoveRecoveryPhoneEmail);
+      assert.notCalled(mockFxaMailer.sendPostRemoveRecoveryPhoneEmail);
     });
 
     it('handles uid without registered phone number', async () => {

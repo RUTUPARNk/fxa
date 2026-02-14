@@ -5,14 +5,9 @@
 import React from 'react';
 import { screen, waitFor } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
-import {
-  createMockIndexOAuthIntegration,
-  createMockIndexOAuthNativeIntegration,
-  Subject,
-} from './mocks';
+import { createMockIndexOAuthNativeIntegration, Subject } from './mocks';
 import { renderWithLocalizationProvider } from 'fxa-react/lib/test-utils/localizationProvider';
 import { MozServices } from '../../lib/types';
-import { MONITOR_CLIENTIDS } from '../../models/integrations/client-matching';
 import GleanMetrics from '../../lib/glean';
 import { MOCK_CMS_INFO } from '../mocks';
 
@@ -122,12 +117,12 @@ describe('Index page', () => {
     thirdPartyAuthWithSeparatorRendered();
   });
 
-  it('renders third party auth with service=aiwindow when supportsKeysOptionalLogin is true', () => {
+  it('renders third party auth with service=smartwindow when supportsKeysOptionalLogin is true', () => {
     renderWithLocalizationProvider(
       <Subject
         integration={createMockIndexOAuthNativeIntegration({
           isSync: false,
-          isFirefoxClientServiceAiWindow: true,
+          isFirefoxClientServiceSmartWindow: true,
         })}
         supportsKeysOptionalLogin={true}
       />
@@ -217,29 +212,6 @@ describe('Index page', () => {
     expect(
       screen.queryByAltText(MOCK_CMS_INFO.EmailFirstPage.logoAltText)
     ).not.toBeInTheDocument();
-  });
-
-  // This is wrapped so that the HTMLFormElement.submit can be mocked
-  // without affecting other tests.
-  describe('deep linking', () => {
-    beforeEach(() => {
-      HTMLFormElement.prototype.submit = jest.fn();
-    });
-    afterEach(() => {
-      jest.resetAllMocks();
-    });
-    it('does not render when deeplinking third party auth', () => {
-      renderWithLocalizationProvider(
-        <Subject
-          integration={createMockIndexOAuthIntegration({
-            clientId: MONITOR_CLIENTIDS[0],
-          })}
-          deeplink="appleLogin"
-        />
-      );
-
-      thirdPartyAuthNotRendered();
-    });
   });
 
   describe('glean metrics', () => {

@@ -13,10 +13,6 @@ const {
   formatMetadataValidationErrorMessage,
   reportValidationError,
 } = require('fxa-shared/sentry/report-validation-error');
-// Matches uid, session, oauth and other common tokens which we would
-// prefer not to include in Sentry reports.
-const TOKENREGEX = /[a-fA-F0-9]{32,}/gi;
-const FILTERED = '[Filtered]';
 
 function reportSentryMessage(message, captureContext) {
   Sentry.withScope((scope) => {
@@ -47,7 +43,9 @@ function reportSentryError(err, request) {
   Sentry.withScope((scope) => {
     if (request) {
       scope.addEventProcessor((sentryEvent) => {
-        sentryEvent.request = Sentry.extractRequestData(request.raw.req);
+        // As of sentry v9, this should automatically happen by adding, Sentry.requestDataIntegration()
+        // Leaving note here for historical context.
+        // event.request = Sentry.extractRequestData(request);
         sentryEvent.level = 'error';
         return sentryEvent;
       });
@@ -98,9 +96,7 @@ function reportSentryError(err, request) {
       const attempt = cause.attempt;
       if (attempt) {
         causeContext.method = attempt.method;
-        causeContext.path = attempt.path
-          ? attempt.path.replace(TOKENREGEX, FILTERED)
-          : null;
+        causeContext.path = attempt.path;
       }
       scope.setContext('cause', causeContext);
     }
@@ -140,7 +136,9 @@ async function configureSentry(server, config, processName = 'key_server') {
           op: 'auth-server',
           name: `${request.method.toUpperCase()} ${request.path}`,
           forceTransaction: true,
-          request: Sentry.extractRequestData(request.raw.req),
+          // As of sentry v9, this should automatically happen by adding, Sentry.requestDataIntegration()
+          // Leaving note here for historical context.
+          // request: Sentry.extractRequestData(request.raw.req),
         });
 
         request.app.sentry = {

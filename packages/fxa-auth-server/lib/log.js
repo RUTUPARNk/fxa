@@ -96,13 +96,13 @@ Lug.prototype.error = function (op, data) {
   // If the error object contains an email address,
   // lift it into top-level fields so that our
   // PII-scrubbing tool is able to find it.
-  if (data.err && data.err.email) {
+  if (data && data.err && data.err.email) {
     if (!data.email) {
       data.email = data.err.email;
     }
     data.err.email = null;
   }
-  this.logger.error(op, Object.assign({}, data, this.getTraceId()));
+  this.logger.error(op, { ...(data || {}), ...this.getTraceId() });
 };
 
 Lug.prototype.fatal = function (op, data) {
@@ -149,6 +149,8 @@ Lug.prototype.summary = function (request, response) {
     path: request.path,
     lang: request.app.acceptLanguage,
     agent: request.headers['user-agent'],
+    sigsciRequestId: request.headers['x-sigsci-requestid'],
+    clientJa4: request.headers['client-ja4'],
     remoteAddressChain: request.app.remoteAddressChain,
     accountRecreated: request.app.accountRecreated,
     t: Date.now() - request.info.received,

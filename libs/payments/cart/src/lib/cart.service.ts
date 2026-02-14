@@ -49,6 +49,7 @@ import {
 } from '@fxa/shared/db/mysql/account';
 import { SanitizeExceptions } from '@fxa/shared/error';
 import { StatsDService } from '@fxa/shared/metrics/statsd';
+import type { CommonMetrics } from '@fxa/payments/metrics';
 
 import {
   PaidInvoiceOnFailedCartError,
@@ -70,11 +71,24 @@ import {
   InvalidPromoCodeCartError,
   CartVersionMismatchError,
   CartInvalidStateForActionError,
+  GetCartMissingTaxAddressError,
+  GetCartFromPriceMissingError,
+  GetCartCustomerMissingError,
+  GetCartSubscriptionMissingError,
+  GetCartPaymentInfoMissingError,
+  GetCartLatestInvoicePreviewMissingError,
+  GetCartFailureFromPriceMissingError,
+  GetCartIntervalMissingError,
+  GetCartUnitAmountForCurrencyMissingError,
+  GetCartPriceForCurrencyRecurringMissingError,
+  SubmitNeedsInputCustomerIdMissingError,
+  SubmitNeedsInputSubscriptionIdMissingError,
+  SubmitNeedsInputUidMissingError,
+  CartSubscriptionDeletionFailedError,
 } from './cart.error';
 import { CartManager } from './cart.manager';
 import type {
   CartDTO,
-  CheckoutCustomerData,
   FromPrice,
   GetNeedsInputResponse,
   NoInputNeededResponse,
@@ -265,11 +279,37 @@ export class CartService {
           }
 
           if (cart.eligibilityStatus === CartEligibilityStatus.CREATE) {
-            await this.subscriptionManager.cancel(subscriptionId, {
-              cancellation_details: {
-                comment: 'Automatic Cancellation: Cart checkout failed.',
-              },
-            });
+            try {
+              await this.subscriptionManager.cancel(subscriptionId, {
+                cancellation_details: {
+                  comment: 'Automatic Cancellation: Cart checkout failed.',
+                },
+              });
+            } catch (e) {
+              if (
+                e.code === 'resource_missing' ||
+                  e.message?.startsWith('No such subscription')
+              ) {
+                this.log.log(
+                  'cartService.wrapWithCartCatch.subscriptionNotFound',
+                  {
+                    subscriptionId,
+                    eligibilityStatus: cart.eligibilityStatus,
+                    offeringId: cart.offeringConfigId,
+                    interval: cart.interval,
+                  }
+                );
+                this.statsd.increment(
+                  'subscription_deletion_failed_not_found'
+                );
+              } else {
+                throw new CartSubscriptionDeletionFailedError(
+                  cartId,
+                  subscriptionId,
+                  e
+                );
+              }
+            }
           } else {
             this.statsd.increment(
               'checkout_failure_subscription_not_cancelled'
@@ -517,8 +557,8 @@ export class CartService {
     cartId: string,
     version: number,
     confirmationTokenId: string,
-    customerData: CheckoutCustomerData,
     attribution: SubscriptionAttributionParams,
+    requestArgs: CommonMetrics,
     sessionUid?: string
   ) {
     return this.wrapWithCartCatch(cartId, async () => {
@@ -546,8 +586,8 @@ export class CartService {
             await this.checkoutService.payWithStripe(
               updatedCart,
               confirmationTokenId,
-              customerData,
               attribution,
+              requestArgs,
               sessionUid
             );
           }).catch((error) => {
@@ -569,8 +609,8 @@ export class CartService {
   async checkoutCartWithPaypal(
     cartId: string,
     version: number,
-    customerData: CheckoutCustomerData,
     attribution: SubscriptionAttributionParams,
+    requestArgs: CommonMetrics,
     sessionUid?: string,
     token?: string
   ) {
@@ -598,8 +638,8 @@ export class CartService {
           this.wrapWithCartCatch(cartId, async () => {
             await this.checkoutService.payWithPaypal(
               updatedCart,
-              customerData,
               attribution,
+              requestArgs,
               sessionUid,
               token
             );
@@ -641,13 +681,16 @@ export class CartService {
       }
 
       let paymentForm: SubPlatPaymentMethodType;
-      if (this.subscriptionManager.getPaymentProvider(subscription) === 'paypal') {
+      if (
+        this.subscriptionManager.getPaymentProvider(subscription) === 'paypal'
+      ) {
         paymentForm = SubPlatPaymentMethodType.PayPal;
       } else {
         const stripePaymentMethod = await this.paymentMethodManager.retrieve(
-          subscription.default_payment_method ?? '',
+          subscription.default_payment_method ?? ''
         );
-        paymentForm = convertStripePaymentMethodTypeToSubPlat(stripePaymentMethod);
+        paymentForm =
+          convertStripePaymentMethodTypeToSubPlat(stripePaymentMethod);
       }
 
       await this.checkoutService.postPaySteps({
@@ -658,6 +701,7 @@ export class CartService {
         paymentProvider:
           this.subscriptionManager.getPaymentProvider(subscription),
         paymentForm,
+        isCancelInterstitialOffer: false,
       });
     });
   }
@@ -810,8 +854,7 @@ export class CartService {
       cartId
     )) as ResultCart & { taxAddress: TaxAddress; currency: string };
 
-    assert(cart.taxAddress !== null, 'Cart must have a tax address');
-    assert(cart.currency !== null, 'Cart must have a currency');
+    assert(cart.taxAddress !== null, new GetCartMissingTaxAddressError(cartId));
     const [
       price,
       metricsOptedOut,
@@ -867,15 +910,15 @@ export class CartService {
     ) {
       assert(
         'fromPrice' in eligibility,
-        'fromPrice not present for upgrade cart'
+        new GetCartFromPriceMissingError(cartId)
       );
-      assert(customer, 'Customer is required for upgrade');
+      assert(customer, new GetCartCustomerMissingError(cartId));
       const fromSubscription =
         await this.subscriptionManager.retrieveForCustomerAndPrice(
           customer.id,
           eligibility.fromPrice.id
         );
-      assert(fromSubscription, 'Subscription required');
+      assert(fromSubscription, new GetCartSubscriptionMissingError(cartId));
       const fromSubscriptionItem = retrieveSubscriptionItem(fromSubscription);
       upcomingInvoicePreview =
         await this.invoiceManager.previewUpcomingForUpgrade({
@@ -952,9 +995,9 @@ export class CartService {
     if (cart.state === CartState.SUCCESS) {
       assert(
         latestInvoicePreview,
-        'latestInvoicePreview not present for success cart'
+        new GetCartLatestInvoicePreviewMissingError(cartId)
       );
-      assert(paymentInfo, 'paymentInfo not present for success cart');
+      assert(paymentInfo, new GetCartPaymentInfoMissingError(cartId));
 
       return {
         ...cart,
@@ -970,21 +1013,30 @@ export class CartService {
 
     let fromPrice: FromPrice | undefined;
     if (cartEligibilityStatus === CartEligibilityStatus.UPGRADE) {
-      assert('fromPrice' in eligibility, 'fromPrice not present for upgrade');
+      assert(
+        'fromPrice' in eligibility,
+        new GetCartFailureFromPriceMissingError(cartId)
+      );
 
       const { price: priceForCurrency, unitAmountForCurrency } =
         await this.priceManager.retrievePricingForCurrency(
           eligibility.fromPrice.id,
           cart.currency
         );
-      assertNotNull(unitAmountForCurrency);
-      assertNotNull(priceForCurrency.recurring);
+      assertNotNull(
+        unitAmountForCurrency,
+        new GetCartUnitAmountForCurrencyMissingError(cartId)
+      );
+      assertNotNull(
+        priceForCurrency.recurring,
+        new GetCartPriceForCurrencyRecurringMissingError(cartId)
+      );
 
       const interval = getSubplatInterval(
         priceForCurrency.recurring.interval,
         priceForCurrency.recurring.interval_count
       );
-      assert(interval, 'Interval not found but is required');
+      assert(interval, new GetCartIntervalMissingError(cartId));
 
       fromPrice = {
         currency: cart.currency,
@@ -1052,12 +1104,15 @@ export class CartService {
   async submitNeedsInput(cartId: string) {
     return this.wrapWithCartCatch(cartId, async () => {
       const cart = await this.cartManager.fetchCartById(cartId);
-      assert(cart.stripeCustomerId, 'Cart must have a stripeCustomerId');
+      assert(
+        cart.stripeCustomerId,
+        new SubmitNeedsInputCustomerIdMissingError(cartId)
+      );
       assert(
         cart.stripeSubscriptionId,
-        'Cart must have a stripeSubscriptionId'
+        new SubmitNeedsInputSubscriptionIdMissingError(cartId)
       );
-      assert(cart.uid, 'Cart must have a uid');
+      assert(cart.uid, new SubmitNeedsInputUidMissingError(cartId));
 
       if (!cart.stripeIntentId) {
         throw new CartIntentNotFoundError(cartId);
@@ -1087,7 +1142,8 @@ export class CartService {
         const paymentMethod = await this.paymentMethodManager.retrieve(
           intent.payment_method
         );
-        const paymentForm = convertStripePaymentMethodTypeToSubPlat(paymentMethod);
+        const paymentForm =
+          convertStripePaymentMethodTypeToSubPlat(paymentMethod);
 
         await this.checkoutService.postPaySteps({
           cart,
@@ -1097,6 +1153,7 @@ export class CartService {
           paymentProvider:
             this.subscriptionManager.getPaymentProvider(subscription),
           paymentForm,
+          isCancelInterstitialOffer: false,
         });
       } else if (intent.status === 'requires_payment_method') {
         const errorCode = isPaymentIntent(intent)

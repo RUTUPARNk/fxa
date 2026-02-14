@@ -4,11 +4,9 @@
 
 'use strict';
 
-const ROOT_DIR = '../..';
-
 const assert = require('assert');
-const config = require(`${ROOT_DIR}/config`).default.getProperties();
-const createBounces = require(`${ROOT_DIR}/lib/bounces`);
+const config = require('../../config').default.getProperties();
+const createBounces = require('../../lib/bounces');
 const { AppError: error } = require('@fxa/accounts/errors');
 const sinon = require('sinon');
 
@@ -23,10 +21,14 @@ describe('bounces', () => {
     const db = {
       emailBounces: sinon.spy(() => Promise.resolve([])),
     };
+    const aliasCheckEnabled = !!config.smtp?.bounces?.aliasCheckEnabled;
+    // When aliasCheckEnabled is true, emailBounces is called twice
+    // (once for normalized email, once for wildcard pattern)
+    const expectedCallCount = aliasCheckEnabled ? 2 : 1;
     return createBounces(config, db)
       .check(EMAIL)
       .then(() => {
-        assert.equal(db.emailBounces.callCount, 1);
+        assert.equal(db.emailBounces.callCount, expectedCallCount);
       });
   });
 

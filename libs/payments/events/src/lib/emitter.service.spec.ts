@@ -30,17 +30,18 @@ import {
   CustomerManager,
   SubscriptionManager,
   PaymentMethodManager,
-  SubPlatPaymentMethodType,
+  PaymentProvider,
   StripePaymentMethodTypeResponseFactory,
 } from '@fxa/payments/customer';
 import { MockFirestoreProvider } from '@fxa/shared/db/firestore';
 import {
   CheckoutParamsFactory,
   CommonMetricsFactory,
+  GenericGleanSubManageEventFactory,
   MockPaymentsGleanConfigProvider,
   MockPaymentsGleanFactory,
-  PaymentProvidersType,
   PaymentsGleanManager,
+  PaymentsGleanService,
 } from '@fxa/payments/metrics';
 import { CartManager } from '@fxa/payments/cart';
 import { PaymentsEmitterService } from './emitter.service';
@@ -55,7 +56,6 @@ import {
   MockAccountDatabaseNestFactory,
 } from '@fxa/shared/db/mysql/account';
 import { AccountManager } from '@fxa/shared/account/account';
-import { retrieveAdditionalMetricsData } from './util/retrieveAdditionalMetricsData';
 import { Logger } from '@nestjs/common';
 import { EmitterServiceHandleAuthError } from './emitter.error';
 import {
@@ -76,6 +76,7 @@ import {
 } from '@fxa/payments/experiments';
 import * as Sentry from '@sentry/nestjs';
 import { faker } from '@faker-js/faker/.';
+import { retrieveAdditionalMetricsData } from './util/retrieveAdditionalMetricsData';
 
 jest.mock('./util/retrieveAdditionalMetricsData');
 const mockedRetrieveAdditionalMetricsData = jest.mocked(
@@ -98,6 +99,7 @@ describe('PaymentsEmitterService', () => {
   let statsd: StatsD;
   let logger: Logger;
   let subscriptionManager: SubscriptionManager;
+  let paymentsGleanService: PaymentsGleanService;
 
   const additionalMetricsData = AdditionalMetricsDataFactory();
   const mockCommonMetricsData = CommonMetricsFactory({
@@ -105,7 +107,7 @@ describe('PaymentsEmitterService', () => {
   });
   const mockCheckoutPaymentEvents = {
     ...mockCommonMetricsData,
-    paymentProvider: 'stripe' as PaymentProvidersType,
+    paymentProvider: PaymentProvider.Stripe,
   };
   let retrieveOptOutMock: jest.SpyInstance<any, unknown[], any>;
   const mockLogger = {
@@ -134,6 +136,7 @@ describe('PaymentsEmitterService', () => {
         StripeClient,
         PriceManager,
         PaymentsGleanManager,
+        PaymentsGleanService,
         ProductConfigurationManager,
         PaypalBillingAgreementManager,
         PayPalClient,
@@ -160,6 +163,7 @@ describe('PaymentsEmitterService', () => {
     statsd = moduleRef.get<StatsD>(StatsDService);
     logger = moduleRef.get<Logger>(Logger);
     subscriptionManager = moduleRef.get(SubscriptionManager);
+    paymentsGleanService = moduleRef.get(PaymentsGleanService);
   });
 
   it('should be defined', () => {
@@ -403,7 +407,7 @@ describe('PaymentsEmitterService', () => {
   describe('handleCheckoutSuccess', () => {
     const mockCustomer = StripeCustomerFactory();
     const mockSubscription = StripeSubscriptionFactory();
-    const mockPaymentMethodType = StripePaymentMethodTypeResponseFactory();
+    const mockPaymentMethod = StripePaymentMethodTypeResponseFactory();
     beforeEach(() => {
       jest
         .spyOn(customerManager, 'retrieve')
@@ -413,7 +417,7 @@ describe('PaymentsEmitterService', () => {
         .mockResolvedValue(StripeResponseFactory([mockSubscription]));
       jest
         .spyOn(paymentMethodManager, 'determineType')
-        .mockResolvedValue(mockPaymentMethodType);
+        .mockResolvedValue(mockPaymentMethod);
       jest
         .spyOn(paymentsGleanManager, 'recordFxaPaySetupSuccess')
         .mockReturnValue();
@@ -440,7 +444,7 @@ describe('PaymentsEmitterService', () => {
           experimentationData: { nimbusUserId },
           ...additionalMetricsData,
         },
-        mockPaymentMethodType.type
+        mockPaymentMethod.provider
       );
     });
 
@@ -502,6 +506,26 @@ describe('PaymentsEmitterService', () => {
     });
   });
 
+  describe('handleGenericSubManageGleanEvent', () => {
+    const mockEventData = GenericGleanSubManageEventFactory();
+
+    beforeEach(() => {
+      jest
+        .spyOn(paymentsGleanService, 'recordGenericSubManageEvent')
+        .mockResolvedValue();
+    });
+
+    it('calls glean service', async () => {
+      await paymentsEmitterService.handleGenericSubManageGleanEvent(
+        mockEventData
+      );
+
+      expect(
+        paymentsGleanService.recordGenericSubManageEvent
+      ).toHaveBeenCalledWith(mockEventData);
+    });
+  });
+
   describe('handleSubscriptionEnded', () => {
     const mockOfferingId = 'VPN';
     const mockInterval = 'month';
@@ -511,7 +535,7 @@ describe('PaymentsEmitterService', () => {
       priceId: additionalMetricsData.cmsMetricsData.priceId,
       priceInterval: mockInterval,
       priceIntervalCount: 1,
-      paymentProvider: SubPlatPaymentMethodType.Card,
+      paymentProvider: PaymentProvider.Stripe,
     });
 
     const mockPrice = StripeResponseFactory(

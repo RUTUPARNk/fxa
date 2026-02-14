@@ -5,9 +5,16 @@
 const { assert } = require('chai');
 const buf = (v) => (Buffer.isBuffer(v) ? v : Buffer.from(v, 'hex'));
 const hex = (v) => (Buffer.isBuffer(v) ? v.toString('hex') : v);
-const path = require('path');
-const proxyquire = require('proxyquire');
 const sinon = require('sinon');
+const path = require('path');
+const { Container } = require('typedi');
+
+const proxyquire = require('proxyquire');
+const {
+  OAUTH_SCOPE_OLD_SYNC,
+  OAUTH_SCOPE_RELAY,
+  OAUTH_SCOPE_SESSION_TOKEN,
+} = require('fxa-shared/oauth/constants');
 
 const UID = 'eaf0';
 const CLIENT_SECRET =
@@ -20,6 +27,10 @@ const DISABLED_CLIENT_ID = 'd15ab1edd15ab1ed';
 const NON_DISABLED_CLIENT_ID = '98e6508e88680e1a';
 const CODE_WITH_KEYS = 'afafaf';
 const CODE_WITHOUT_KEYS = 'f0f0f0';
+const GRANT_TOKEN_EXCHANGE = 'urn:ietf:params:oauth:grant-type:token-exchange';
+const SUBJECT_TOKEN_TYPE_REFRESH =
+  'urn:ietf:params:oauth:token-type:refresh_token';
+const FIREFOX_IOS_CLIENT_ID = '1b1a3e44c54fbb58';
 
 const mockDb = { touchSessionToken: sinon.stub() };
 const mockStatsD = { increment: sinon.stub() };
@@ -102,8 +113,17 @@ function joiNotAllowed(err, param) {
   assert.equal(err.details[0].message, `"${param}" is not allowed`);
 }
 
+before(() => {
+  Container.set('OAuthClientInfo', {
+    async fetch() {
+      return 'sync';
+    },
+  });
+});
+
 describe('/token POST', function () {
   const route = tokenRoutes[0];
+
   describe('input validation', () => {
     // route validation function
     function v(req, ctx, cb) {
@@ -363,6 +383,272 @@ describe('/token POST', function () {
   });
 });
 
+describe('token exchange grant_type', function () {
+  const route = tokenRoutes[0];
+
+  describe('input validation', () => {
+    function v(req) {
+      const validationSchema = route.config.validate.payload;
+      return validationSchema.validate(req);
+    }
+
+    it('requires subject_token when grant_type is token-exchange', () => {
+      const res = v({
+        client_id: CLIENT_ID,
+        grant_type: GRANT_TOKEN_EXCHANGE,
+        subject_token_type: SUBJECT_TOKEN_TYPE_REFRESH,
+        scope: OAUTH_SCOPE_RELAY,
+      });
+      joiRequired(res.error, 'subject_token');
+    });
+
+    it('requires subject_token_type when grant_type is token-exchange', () => {
+      const res = v({
+        client_id: CLIENT_ID,
+        grant_type: GRANT_TOKEN_EXCHANGE,
+        subject_token: REFRESH_TOKEN,
+        scope: OAUTH_SCOPE_RELAY,
+      });
+      joiRequired(res.error, 'subject_token_type');
+    });
+
+    it('requires scope when grant_type is token-exchange', () => {
+      const res = v({
+        client_id: CLIENT_ID,
+        grant_type: GRANT_TOKEN_EXCHANGE,
+        subject_token: REFRESH_TOKEN,
+        subject_token_type: SUBJECT_TOKEN_TYPE_REFRESH,
+      });
+      joiRequired(res.error, 'scope');
+    });
+
+    it('forbids subject_token for other grant types', () => {
+      const res = v({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code: CODE,
+        subject_token: REFRESH_TOKEN,
+      });
+      joiNotAllowed(res.error, 'subject_token');
+    });
+
+    it('forbids subject_token_type for other grant types', () => {
+      const res = v({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code: CODE,
+        subject_token_type: SUBJECT_TOKEN_TYPE_REFRESH,
+      });
+      joiNotAllowed(res.error, 'subject_token_type');
+    });
+
+    it('forbids client_secret for token-exchange', () => {
+      const res = v({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        grant_type: GRANT_TOKEN_EXCHANGE,
+        subject_token: REFRESH_TOKEN,
+        subject_token_type: SUBJECT_TOKEN_TYPE_REFRESH,
+        scope: OAUTH_SCOPE_RELAY,
+      });
+      joiNotAllowed(res.error, 'client_secret');
+    });
+
+    it('accepts valid token exchange request', () => {
+      const res = v({
+        client_id: CLIENT_ID,
+        grant_type: GRANT_TOKEN_EXCHANGE,
+        subject_token: REFRESH_TOKEN,
+        subject_token_type: SUBJECT_TOKEN_TYPE_REFRESH,
+        scope: OAUTH_SCOPE_RELAY,
+      });
+      assert.equal(res.error, undefined);
+    });
+  });
+
+  describe('validateTokenExchangeGrant', () => {
+    const ScopeSet = require('fxa-shared').oauth.scopes;
+
+    it('rejects non-existent subject_token', async () => {
+      const routes = proxyquire(tokenRoutePath, {
+        ...tokenRoutesDepMocks,
+      })({
+        ...tokenRoutesArgMocks,
+        oauthDB: {
+          ...tokenRoutesArgMocks.oauthDB,
+          async getRefreshToken() {
+            return null;
+          },
+        },
+      });
+      const request = {
+        headers: {},
+        payload: {
+          grant_type: GRANT_TOKEN_EXCHANGE,
+          subject_token: REFRESH_TOKEN,
+          subject_token_type: SUBJECT_TOKEN_TYPE_REFRESH,
+          scope: OAUTH_SCOPE_RELAY,
+        },
+        emitMetricsEvent: () => {},
+      };
+      try {
+        await routes[0].config.handler(request);
+        assert.fail('should have errored');
+      } catch (err) {
+        assert.equal(err.errno, 108); // Invalid token
+      }
+    });
+
+    it('rejects tokens from non-Firefox clients', async () => {
+      const NON_FIREFOX_CLIENT_ID = '123456789a';
+      const routes = proxyquire(tokenRoutePath, {
+        ...tokenRoutesDepMocks,
+      })({
+        ...tokenRoutesArgMocks,
+        oauthDB: {
+          ...tokenRoutesArgMocks.oauthDB,
+          async getRefreshToken() {
+            return {
+              userId: buf(UID),
+              clientId: buf(NON_FIREFOX_CLIENT_ID),
+              tokenId: buf('1234567890abcdef'),
+              scope: ScopeSet.fromString(OAUTH_SCOPE_OLD_SYNC),
+              profileChangedAt: Date.now(),
+            };
+          },
+        },
+      });
+      const request = {
+        headers: {},
+        payload: {
+          grant_type: GRANT_TOKEN_EXCHANGE,
+          subject_token: REFRESH_TOKEN,
+          subject_token_type: SUBJECT_TOKEN_TYPE_REFRESH,
+          scope: OAUTH_SCOPE_RELAY,
+        },
+        emitMetricsEvent: () => {},
+      };
+      try {
+        await routes[0].config.handler(request);
+        assert.fail('should have errored');
+      } catch (err) {
+        assert.equal(err.errno, 111); // Unauthorized
+        assert.include(err.message, 'not authorized for token exchange');
+      }
+    });
+
+    it('rejects unauthorized scopes', async () => {
+      const UNAUTHORIZED_SCOPE =
+        'https://identity.mozilla.com/apps/unauthorized';
+      const routes = proxyquire(tokenRoutePath, {
+        ...tokenRoutesDepMocks,
+      })({
+        ...tokenRoutesArgMocks,
+        oauthDB: {
+          ...tokenRoutesArgMocks.oauthDB,
+          async getRefreshToken() {
+            return {
+              userId: buf(UID),
+              clientId: buf(FIREFOX_IOS_CLIENT_ID),
+              tokenId: buf('1234567890abcdef'),
+              scope: ScopeSet.fromString(OAUTH_SCOPE_OLD_SYNC),
+              profileChangedAt: Date.now(),
+            };
+          },
+        },
+      });
+      const request = {
+        headers: {},
+        payload: {
+          grant_type: GRANT_TOKEN_EXCHANGE,
+          subject_token: REFRESH_TOKEN,
+          subject_token_type: SUBJECT_TOKEN_TYPE_REFRESH,
+          scope: UNAUTHORIZED_SCOPE,
+        },
+        emitMetricsEvent: () => {},
+      };
+      try {
+        await routes[0].config.handler(request);
+        assert.fail('should have errored');
+      } catch (err) {
+        assert.equal(err.errno, 112); // Forbidden
+      }
+    });
+
+    it('returns combined scopes on success', async () => {
+      let removedTokenId = null;
+      const routes = proxyquire(tokenRoutePath, {
+        ...tokenRoutesDepMocks,
+        '../../oauth/grant': {
+          generateTokens: (grant) => {
+            // Verify combined scope is passed to token generation
+            assert.isTrue(grant.scope.contains(OAUTH_SCOPE_OLD_SYNC));
+            assert.isTrue(grant.scope.contains(OAUTH_SCOPE_RELAY));
+            return {
+              access_token: 'new_access_token',
+              token_type: 'bearer',
+              scope: grant.scope.toString(),
+              expires_in: 3600,
+              refresh_token: 'new_refresh_token',
+            };
+          },
+          validateRequestedGrant: () => ({ offline: true, scope: 'testo' }),
+        },
+      })({
+        ...tokenRoutesArgMocks,
+        log: {
+          debug: () => {},
+          warn: () => {},
+          info: () => {},
+        },
+        db: {
+          ...tokenRoutesArgMocks.db,
+          async deviceFromRefreshTokenId() {
+            return null;
+          },
+        },
+        oauthDB: {
+          ...tokenRoutesArgMocks.oauthDB,
+          async getRefreshToken() {
+            return {
+              userId: buf(UID),
+              clientId: buf(FIREFOX_IOS_CLIENT_ID),
+              tokenId: buf('1234567890abcdef'),
+              scope: ScopeSet.fromString(OAUTH_SCOPE_OLD_SYNC),
+              profileChangedAt: Date.now(),
+            };
+          },
+          async removeRefreshToken({ tokenId }) {
+            removedTokenId = tokenId;
+          },
+        },
+      });
+
+      const request = {
+        headers: {},
+        payload: {
+          grant_type: GRANT_TOKEN_EXCHANGE,
+          subject_token: REFRESH_TOKEN,
+          subject_token_type: SUBJECT_TOKEN_TYPE_REFRESH,
+          scope: OAUTH_SCOPE_RELAY,
+        },
+        emitMetricsEvent: () => {},
+      };
+
+      const result = await routes[0].config.handler(request);
+
+      assert.equal(result.access_token, 'new_access_token');
+      assert.equal(result.refresh_token, 'new_refresh_token');
+      assert.include(result.scope, OAUTH_SCOPE_OLD_SYNC);
+      assert.include(result.scope, OAUTH_SCOPE_RELAY);
+      // Verify original token was revoked with correct ID
+      assert.equal(hex(removedTokenId), '1234567890abcdef');
+    });
+  });
+});
+
 describe('/oauth/token POST', function () {
   describe('update session last access time', async () => {
     const sessionToken = { uid: 'abc' };
@@ -417,6 +703,276 @@ describe('/oauth/token POST', function () {
       })(tokenRoutesArgMocks);
       await routes[1].handler(request);
       sinon.assert.notCalled(mockDb.touchSessionToken);
+    });
+  });
+
+  describe('token exchange via /oauth/token', () => {
+    const ScopeSet = require('fxa-shared').oauth.scopes;
+    const MOCK_DEVICE_ID = 'device1234567890abcdef';
+
+    it('handles token exchange and passes existingDeviceId to newTokenNotification', async () => {
+      const PROFILE_SCOPE = 'profile';
+      const newTokenNotificationStub = sinon.stub().resolves();
+      const sessionTokenStub = sinon
+        .stub()
+        .rejects(new Error('should not be called'));
+      const routes = proxyquire(tokenRoutePath, {
+        ...tokenRoutesDepMocks,
+        '../../oauth/grant': {
+          generateTokens: (grant) => ({
+            access_token: 'new_access_token',
+            token_type: 'bearer',
+            scope: grant.scope.toString(),
+            expires_in: 3600,
+            refresh_token: 'new_refresh_token',
+          }),
+          validateRequestedGrant: () => ({ offline: true, scope: 'testo' }),
+        },
+        '../utils/oauth': {
+          newTokenNotification: newTokenNotificationStub,
+        },
+      })({
+        ...tokenRoutesArgMocks,
+        log: {
+          debug: () => {},
+          warn: () => {},
+          info: () => {},
+        },
+        db: {
+          ...tokenRoutesArgMocks.db,
+          sessionToken: sessionTokenStub,
+          async deviceFromRefreshTokenId() {
+            // Return an existing device associated with the old refresh token
+            return { id: MOCK_DEVICE_ID };
+          },
+        },
+        oauthDB: {
+          ...tokenRoutesArgMocks.oauthDB,
+          async getRefreshToken() {
+            // Original token has both sync and profile scopes
+            return {
+              userId: buf(UID),
+              clientId: buf(FIREFOX_IOS_CLIENT_ID),
+              tokenId: buf('1234567890abcdef'),
+              scope: ScopeSet.fromString(
+                `${OAUTH_SCOPE_OLD_SYNC} ${PROFILE_SCOPE} ${OAUTH_SCOPE_SESSION_TOKEN}`
+              ),
+              profileChangedAt: Date.now(),
+            };
+          },
+          async removeRefreshToken() {},
+        },
+      });
+
+      const request = {
+        auth: { credentials: null },
+        headers: {},
+        payload: {
+          grant_type: GRANT_TOKEN_EXCHANGE,
+          subject_token: REFRESH_TOKEN,
+          subject_token_type: SUBJECT_TOKEN_TYPE_REFRESH,
+          scope: OAUTH_SCOPE_RELAY,
+        },
+        emitMetricsEvent: async () => {},
+      };
+
+      const result = await routes[1].handler(request);
+
+      assert.equal(result.access_token, 'new_access_token');
+      assert.equal(result.refresh_token, 'new_refresh_token');
+      // Should have all three scopes: sync, profile, and relay
+      assert.include(result.scope, OAUTH_SCOPE_OLD_SYNC);
+      assert.include(result.scope, PROFILE_SCOPE);
+      assert.include(result.scope, OAUTH_SCOPE_RELAY);
+      assert.isUndefined(result._clientId);
+      assert.isUndefined(result._existingDeviceId);
+      // Token exchange should call newTokenNotification with existingDeviceId and clientId
+      sinon.assert.calledOnce(newTokenNotificationStub);
+      const callArgs = newTokenNotificationStub.firstCall.args;
+      assert.deepEqual(callArgs[5], {
+        skipEmail: true,
+        existingDeviceId: MOCK_DEVICE_ID,
+        clientId: FIREFOX_IOS_CLIENT_ID,
+      });
+      // Token exchange for a refresh token should NOT call db.sessionToken (silent upgrade
+      // skips session token creation), even when session is in the scope
+      sinon.assert.notCalled(sessionTokenStub);
+    });
+
+    it('handles token exchange when no existing device is found (existingDeviceId is undefined)', async () => {
+      const PROFILE_SCOPE = 'profile';
+      const newTokenNotificationStub = sinon.stub().resolves();
+      const routes = proxyquire(tokenRoutePath, {
+        ...tokenRoutesDepMocks,
+        '../../oauth/grant': {
+          generateTokens: (grant) => ({
+            access_token: 'new_access_token',
+            token_type: 'bearer',
+            scope: grant.scope.toString(),
+            expires_in: 3600,
+            refresh_token: 'new_refresh_token',
+          }),
+          validateRequestedGrant: () => ({ offline: true, scope: 'testo' }),
+        },
+        '../utils/oauth': {
+          newTokenNotification: newTokenNotificationStub,
+        },
+      })({
+        ...tokenRoutesArgMocks,
+        log: {
+          debug: () => {},
+          warn: () => {},
+          info: () => {},
+        },
+        db: {
+          ...tokenRoutesArgMocks.db,
+          async deviceFromRefreshTokenId() {
+            // No device associated with the refresh token
+            return null;
+          },
+        },
+        oauthDB: {
+          ...tokenRoutesArgMocks.oauthDB,
+          async getRefreshToken() {
+            return {
+              userId: buf(UID),
+              clientId: buf(FIREFOX_IOS_CLIENT_ID),
+              tokenId: buf('1234567890abcdef'),
+              scope: ScopeSet.fromString(
+                `${OAUTH_SCOPE_OLD_SYNC} ${PROFILE_SCOPE}`
+              ),
+              profileChangedAt: Date.now(),
+            };
+          },
+          async removeRefreshToken() {},
+        },
+      });
+
+      const request = {
+        auth: { credentials: null },
+        headers: {},
+        payload: {
+          grant_type: GRANT_TOKEN_EXCHANGE,
+          subject_token: REFRESH_TOKEN,
+          subject_token_type: SUBJECT_TOKEN_TYPE_REFRESH,
+          scope: OAUTH_SCOPE_RELAY,
+        },
+        emitMetricsEvent: async () => {},
+      };
+
+      const result = await routes[1].handler(request);
+
+      assert.equal(result.access_token, 'new_access_token');
+      assert.equal(result.refresh_token, 'new_refresh_token');
+      assert.isUndefined(result._clientId);
+      assert.isUndefined(result._existingDeviceId);
+      // Token exchange should call newTokenNotification with undefined existingDeviceId
+      sinon.assert.calledOnce(newTokenNotificationStub);
+      const callArgs = newTokenNotificationStub.firstCall.args;
+      assert.deepEqual(callArgs[5], {
+        skipEmail: true,
+        existingDeviceId: undefined,
+        clientId: FIREFOX_IOS_CLIENT_ID,
+      });
+    });
+  });
+
+  describe('fxa-credentials with reason=token_migration', () => {
+    it('calls newTokenNotification with skipEmail: true when reason is token_migration', async () => {
+      const newTokenNotificationStub = sinon.stub().resolves();
+      const sessionTokenStub = sinon
+        .stub()
+        .rejects(new Error('should not be called'));
+      const routes = proxyquire(tokenRoutePath, {
+        ...tokenRoutesDepMocks,
+        '../../oauth/grant': {
+          generateTokens:
+            tokenRoutesDepMocks['../../oauth/grant'].generateTokens,
+          validateRequestedGrant: () => ({
+            offline: true,
+            scope: OAUTH_SCOPE_SESSION_TOKEN,
+            clientId: buf(CLIENT_ID),
+          }),
+        },
+        '../utils/oauth': {
+          newTokenNotification: newTokenNotificationStub,
+        },
+      })({
+        ...tokenRoutesArgMocks,
+        log: { debug: () => {}, warn: () => {}, info: () => {} },
+        db: {
+          ...tokenRoutesArgMocks.db,
+          sessionToken: sessionTokenStub,
+        },
+      });
+
+      const request = {
+        auth: { credentials: { uid: UID } },
+        headers: {},
+        payload: {
+          grant_type: 'fxa-credentials',
+          client_id: CLIENT_ID,
+          scope: 'profile',
+          access_type: 'offline',
+          reason: 'token_migration',
+        },
+        emitMetricsEvent: async () => {},
+      };
+
+      await routes[1].handler(request);
+      sinon.assert.calledOnce(newTokenNotificationStub);
+      const callArgs = newTokenNotificationStub.firstCall.args;
+      assert.deepEqual(callArgs[5], {
+        skipEmail: true,
+        existingDeviceId: undefined,
+        clientId: CLIENT_ID,
+      });
+      // Token exchange for a refresh token should NOT call db.sessionToken (silent upgrade
+      // skips session token creation), even when session is in the scope
+      sinon.assert.notCalled(sessionTokenStub);
+    });
+
+    it('calls newTokenNotification with skipEmail: false when reason is not provided', async () => {
+      const newTokenNotificationStub = sinon.stub().resolves();
+      const routes = proxyquire(tokenRoutePath, {
+        ...tokenRoutesDepMocks,
+        '../../oauth/grant': {
+          generateTokens:
+            tokenRoutesDepMocks['../../oauth/grant'].generateTokens,
+          validateRequestedGrant: () => ({
+            offline: true,
+            scope: 'testo',
+            clientId: buf(CLIENT_ID),
+          }),
+        },
+        '../utils/oauth': {
+          newTokenNotification: newTokenNotificationStub,
+        },
+      })({
+        ...tokenRoutesArgMocks,
+        log: { debug: () => {}, warn: () => {}, info: () => {} },
+      });
+
+      const request = {
+        auth: { credentials: { uid: UID } },
+        headers: {},
+        payload: {
+          grant_type: 'fxa-credentials',
+          client_id: CLIENT_ID,
+          scope: 'profile',
+          access_type: 'offline',
+        },
+        emitMetricsEvent: async () => {},
+      };
+
+      await routes[1].handler(request);
+      sinon.assert.calledOnce(newTokenNotificationStub);
+      const callArgs = newTokenNotificationStub.firstCall.args;
+      assert.deepEqual(callArgs[5], {
+        skipEmail: false,
+        existingDeviceId: undefined,
+        clientId: CLIENT_ID,
+      });
     });
   });
 });

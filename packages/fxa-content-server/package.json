@@ -94,7 +94,7 @@
     "jsxgettext-recursive-next": "1.1.0",
     "legal-docs": "https://github.com/mozilla/legal-docs.git#68a02d3a95f22fb10db68893bb54e49bc0604f69",
     "load-grunt-tasks": "^5.1.0",
-    "lodash": "^4.17.21",
+    "lodash": "^4.17.23",
     "mkdirp": "3.0.1",
     "mocha": "^10.4.0",
     "morgan": "^1.10.0",
@@ -116,7 +116,7 @@
     "ua-parser-js": "1.0.35",
     "underscore": "^1.13.1",
     "verror": "1.10.1",
-    "webpack": "^5.97.0"
+    "webpack": "^5.104.1"
   },
   "devDependencies": {
     "@babel/cli": "7.23.0",
@@ -149,7 +149,7 @@
     "jsqr": "1.4.0",
     "mini-css-extract-plugin": "^2.9.2",
     "otplib": "^11.0.1",
-    "pm2": "^6.0.9",
+    "pm2": "^6.0.14",
     "postcss-assets": "^6.0.0",
     "postcss-import": "^16.1.0",
     "prettier": "^3.5.3",

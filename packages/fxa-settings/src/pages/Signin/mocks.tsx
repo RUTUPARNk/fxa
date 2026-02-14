@@ -22,17 +22,7 @@ import {
   MOCK_AVATAR_NON_DEFAULT,
   mockFinishOAuthFlowHandler,
   MOCK_CLIENT_ID,
-  MOCK_AVATAR_DEFAULT,
-  MOCK_AUTH_PW,
-  MOCK_CLIENT_SALT,
   MOCK_KEY_FETCH_TOKEN,
-  MOCK_PASSWORD_CHANGE_TOKEN,
-  MOCK_WRAP_KB,
-  MOCK_AUTH_PW_V2,
-  MOCK_WRAP_KB_V2,
-  MOCK_KA,
-  MOCK_KEY_FETCH_TOKEN_2,
-  MOCK_FLOW_ID,
   mockGetWebChannelServices,
 } from '../mocks';
 import { mockUseFxAStatus } from '../../lib/hooks/useFxAStatus/mocks';
@@ -52,16 +42,6 @@ import {
   AuthUiErrorNos,
   AuthUiErrors,
 } from '../../lib/auth-errors/auth-errors';
-import {
-  AVATAR_QUERY,
-  BEGIN_SIGNIN_MUTATION,
-  CREDENTIAL_STATUS_MUTATION,
-  GET_ACCOUNT_KEYS_MUTATION,
-  PASSWORD_CHANGE_FINISH_MUTATION,
-  PASSWORD_CHANGE_START_MUTATION,
-} from './gql';
-import { ApolloError } from '@apollo/client';
-import { GraphQLError } from 'graphql';
 import { BeginSigninError } from '../../lib/error-utils';
 import { mockAppContext } from '../../models/mocks';
 import { GenericData } from '../../lib/model-data';
@@ -120,7 +100,7 @@ export function createMockSigninWebIntegration({
     data: new IntegrationData(new GenericData({})),
     isDesktopSync: () => false,
     isFirefoxClientServiceRelay: () => false,
-    isFirefoxClientServiceAiWindow: () => false,
+    isFirefoxClientServiceSmartWindow: () => false,
     isFirefoxNonSync: () => false,
     getWebChannelServices: mockGetWebChannelServices(),
     wantsLogin: () => false,
@@ -149,7 +129,7 @@ export function createMockSigninOAuthNativeSyncIntegration({
     data: new IntegrationData(new GenericData({})),
     isDesktopSync: () => isSync && !isMobile,
     isFirefoxClientServiceRelay: () => !isSync && !isMobile,
-    isFirefoxClientServiceAiWindow: () => false,
+    isFirefoxClientServiceSmartWindow: () => false,
     isFirefoxNonSync: () => !isSync && !isMobile,
     getWebChannelServices: mockGetWebChannelServices({ isSync }),
     wantsLogin: () => false,
@@ -184,7 +164,7 @@ export function createMockSigninOAuthIntegration({
     isDesktopSync: () => isSync,
     data: new IntegrationData(new GenericData({})),
     isFirefoxClientServiceRelay: () => false,
-    isFirefoxClientServiceAiWindow: () => false,
+    isFirefoxClientServiceSmartWindow: () => false,
     isFirefoxNonSync: () => false,
     getWebChannelServices: mockGetWebChannelServices({ isSync }),
     getCmsInfo: () => cmsInfo,
@@ -197,13 +177,15 @@ export function createMockSigninOAuthNativeIntegration({
   service = 'sync',
   isSync = true,
   isMobile = false,
+  cmsInfo = undefined,
 }: {
   service?: string;
   isSync?: boolean;
   isMobile?: boolean;
+  cmsInfo?: RelierCmsInfo;
 } = {}): SigninOAuthIntegration {
   const isRelay = service === OAuthNativeServices.Relay;
-  const isAiWindow = service === OAuthNativeServices.AiWindow;
+  const isSmartWindow = service === OAuthNativeServices.SmartWindow;
   return {
     type: IntegrationType.OAuthNative,
     getService: () => service,
@@ -214,214 +196,18 @@ export function createMockSigninOAuthNativeIntegration({
     isDesktopSync: () => isSync && !isMobile,
     data: new IntegrationData(new GenericData({})),
     isFirefoxClientServiceRelay: () => isRelay,
-    isFirefoxClientServiceAiWindow: () => isAiWindow,
-    isFirefoxNonSync: () => isRelay || isAiWindow,
+    isFirefoxClientServiceSmartWindow: () => isSmartWindow,
+    isFirefoxNonSync: () => isRelay || isSmartWindow,
     getWebChannelServices: mockGetWebChannelServices({
       isSync,
       isRelay,
-      isAiWindow,
+      isSmartWindow,
     }),
     getClientId: () => MOCK_CLIENT_ID,
-    getCmsInfo: () => undefined,
+    getCmsInfo: () => cmsInfo,
     isFirefoxMobileClient: () => isSync && isMobile,
     getLegalTerms: () => undefined,
   };
-}
-
-export function mockGqlAvatarUseQuery() {
-  return {
-    request: { query: AVATAR_QUERY },
-    result: {
-      data: {
-        account: {
-          avatar: MOCK_AVATAR_DEFAULT,
-        },
-      },
-    },
-  };
-}
-
-export function mockGqlBeginSigninMutation(
-  opts: {
-    keys: boolean;
-    originalLoginEmail?: string;
-    service?: string;
-    unblockCode?: string;
-  },
-  inputOverrides: any = {},
-  resultOverrides?: {
-    emailVerified?: boolean;
-    sessionVerified?: boolean;
-  }
-) {
-  const result = opts.keys
-    ? createBeginSigninResponse({
-        keyFetchToken: MOCK_KEY_FETCH_TOKEN,
-        // This doesn't actually come back from the server. We have to 'patch it' with
-        // the current client side credentials after the request comes back.
-        // unwrapBKey: MOCK_UNWRAP_BKEY,
-      })
-    : createBeginSigninResponse();
-
-  // Add ability to override result
-  if (resultOverrides?.emailVerified !== undefined) {
-    result.data.signIn.emailVerified = resultOverrides.emailVerified;
-  }
-  if (resultOverrides?.sessionVerified !== undefined) {
-    result.data.signIn.sessionVerified = resultOverrides.sessionVerified;
-  }
-
-  return {
-    request: {
-      query: BEGIN_SIGNIN_MUTATION,
-      variables: {
-        input: {
-          email: MOCK_EMAIL,
-          authPW: MOCK_AUTH_PW,
-          ...inputOverrides,
-          options: {
-            ...opts,
-            verificationMethod: VerificationMethods.EMAIL_OTP,
-            metricsContext: { flowId: MOCK_FLOW_ID },
-          },
-        },
-      },
-    },
-    result,
-  };
-}
-
-export function mockGqlCredentialStatusMutation(overrides?: {
-  upgradeNeeded?: boolean;
-  currentVersion?: 'v1' | 'v2';
-  clientSalt?: string;
-}) {
-  return {
-    request: {
-      query: CREDENTIAL_STATUS_MUTATION,
-      variables: {
-        input: 'johndope@example.com',
-      },
-    },
-    result: {
-      data: {
-        credentialStatus: {
-          upgradeNeeded: true,
-          currentVersion: 'v2',
-          clientSalt: MOCK_CLIENT_SALT,
-          ...(overrides || {}),
-        },
-      },
-    },
-  };
-}
-
-export function mockGqlPasswordChangeStartMutation() {
-  return {
-    request: {
-      query: PASSWORD_CHANGE_START_MUTATION,
-      variables: {
-        input: {
-          email: MOCK_EMAIL,
-          oldAuthPW: MOCK_AUTH_PW,
-          sessionToken: MOCK_SESSION_TOKEN,
-        },
-      },
-    },
-    result: {
-      data: {
-        passwordChangeStart: {
-          keyFetchToken: MOCK_KEY_FETCH_TOKEN,
-          passwordChangeToken: MOCK_PASSWORD_CHANGE_TOKEN,
-        },
-      },
-    },
-  };
-}
-
-export function mockGqlGetAccountKeysMutation() {
-  return {
-    request: {
-      query: GET_ACCOUNT_KEYS_MUTATION,
-      variables: {
-        input: MOCK_KEY_FETCH_TOKEN,
-      },
-    },
-    result: {
-      data: {
-        wrappedAccountKeys: {
-          kA: MOCK_KA,
-          wrapKB: MOCK_WRAP_KB,
-        },
-      },
-    },
-  };
-}
-
-export function mockGqlPasswordChangeFinishMutation() {
-  return {
-    request: {
-      query: PASSWORD_CHANGE_FINISH_MUTATION,
-      variables: {
-        input: {
-          passwordChangeToken: MOCK_PASSWORD_CHANGE_TOKEN,
-          authPW: MOCK_AUTH_PW,
-          wrapKb: MOCK_WRAP_KB,
-          authPWVersion2: MOCK_AUTH_PW_V2,
-          wrapKbVersion2: MOCK_WRAP_KB_V2,
-          clientSalt: MOCK_CLIENT_SALT,
-        },
-      },
-    },
-    result: {
-      data: {
-        passwordChangeFinish: {
-          uid: MOCK_UID,
-          sessionToken: MOCK_SESSION_TOKEN,
-          verified: true,
-          authAt: 'foo',
-          keyFetchToken: MOCK_KEY_FETCH_TOKEN,
-          keyFetchToken2: MOCK_KEY_FETCH_TOKEN_2,
-        },
-      },
-    },
-  };
-}
-
-export function mockBeginSigninMutationWithV2Password() {
-  return {
-    request: {
-      query: BEGIN_SIGNIN_MUTATION,
-      variables: {
-        input: {
-          email: MOCK_EMAIL,
-          authPW: MOCK_AUTH_PW_V2,
-          options: {
-            verificationMethod: VerificationMethods.EMAIL_OTP,
-            keys: false,
-            metricsContext: { flowId: MOCK_FLOW_ID },
-          },
-        },
-      },
-    },
-    result: createBeginSigninResponse(),
-  };
-}
-
-export function mockGqlError(
-  error: AuthUiError = AuthUiErrors.UNEXPECTED_ERROR,
-  extensionOverrides: any = {}
-) {
-  return new ApolloError({
-    graphQLErrors: [
-      new GraphQLError(error.message, {
-        extensions: {
-          errno: error.errno,
-          ...extensionOverrides,
-        },
-      }),
-    ],
-  });
 }
 
 export const MOCK_VERIFICATION = {
@@ -542,7 +328,9 @@ export const Subject = ({
   finishOAuthFlowHandler = mockFinishOAuthFlowHandler,
   supportsKeysOptionalLogin = false,
   ...props // overrides
-}: Partial<SigninProps> & { supportsKeysOptionalLogin?: boolean } = {}) => {
+}: Partial<SigninProps> & {
+  supportsKeysOptionalLogin?: boolean;
+} = {}) => {
   const useFxAStatusResult = mockUseFxAStatus({ supportsKeysOptionalLogin });
   return (
     <LocationProvider>

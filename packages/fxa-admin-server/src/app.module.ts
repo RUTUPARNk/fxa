@@ -3,12 +3,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 import { HealthModule } from 'fxa-shared/nestjs/health/health.module';
-import { MozLoggerModule, MozLoggerService } from '@fxa/shared/mozlog';
+import { MozLoggerModule } from '@fxa/shared/mozlog';
 import { MetricsFactory } from 'fxa-shared/nestjs/metrics.service';
 import { getVersionInfo } from 'fxa-shared/nestjs/version';
 import { join } from 'path';
-import { APP_FILTER } from '@nestjs/core';
-import { SentryGlobalGraphQLFilter, SentryModule } from '@sentry/nestjs/setup';
 import { LegacyStatsDProvider } from '@fxa/shared/metrics/statsd';
 import {
   LegacyNotifierServiceProvider,
@@ -29,7 +27,6 @@ import { EventLoggingModule } from './event-logging/event-logging.module';
 import { GqlModule } from './gql/gql.module';
 import { NewslettersModule } from './newsletters/newsletters.module';
 import { SubscriptionModule } from './subscriptions/subscriptions.module';
-import { LOGGER_PROVIDER } from '@fxa/shared/log';
 
 const version = getVersionInfo(__dirname);
 
@@ -42,7 +39,6 @@ const version = getVersionInfo(__dirname);
     BackendModule,
     DatabaseModule,
     EventLoggingModule,
-    SentryModule.forRoot(),
     SubscriptionModule,
     NewslettersModule,
     GqlModule,
@@ -82,10 +78,6 @@ const version = getVersionInfo(__dirname);
     LegacyNotifierServiceProvider,
     LegacyNotifierSnsFactory,
     LegacyStatsDProvider,
-    {
-      provide: APP_FILTER,
-      useClass: SentryGlobalGraphQLFilter,
-    },
   ],
 })
 export class AppModule {}

@@ -126,7 +126,10 @@ const CompleteResetPasswordContainer = ({
   ) => {
     if (accountResetData.sessionVerified) {
       // For verified users with OAuth integration, navigate to confirmation page then to the relying party
-      if (isOAuth && !integration.isSync()) {
+      if (
+        isOAuth &&
+        !(integration.isSync() || integration.isFirefoxNonSync())
+      ) {
         sensitiveDataClient.setDataType(SensitiveData.Key.AccountReset, {
           keyFetchToken: accountResetData.keyFetchToken,
           unwrapBKey: accountResetData.unwrapBKey,
@@ -136,7 +139,7 @@ const CompleteResetPasswordContainer = ({
         });
       }
 
-      // For web integration and sync navigate to settings
+      // For web integration and sync/relay/smart window navigate to settings
       // Sync users will see an account recovery key promotion banner in settings
       // if they don't have one configured
       alertBar.success(
@@ -205,7 +208,6 @@ const CompleteResetPasswordContainer = ({
         undefined,
         includeRecoveryKeyPrompt
       );
-    console.log('accountResetData', accountResetData);
     return accountResetData;
   };
 
@@ -222,11 +224,12 @@ const CompleteResetPasswordContainer = ({
       lastLogin: Date.now(),
       sessionToken: accountResetData.sessionToken,
       verified: accountResetData.sessionVerified,
+      sessionVerified: accountResetData.sessionVerified,
     });
 
     // This handles the sync desktop v3 case and the sync oauth_webchannel_v1 case.
     // Other oauth flows are handled in the next step.
-    if (integration.isSync()) {
+    if (integration.isSync() || integration.isFirefoxNonSync()) {
       firefox.fxaLoginSignedInUser({
         authAt: accountResetData.authAt,
         email,
@@ -368,8 +371,7 @@ const CompleteResetPasswordContainer = ({
         recoveryKeyExists,
         estimatedSyncDeviceCount,
       }}
-      isFirefoxClientServiceRelay={integration.isFirefoxClientServiceRelay()}
-      integrationIsSync={integration.isSync()}
+      integration={integration}
       locationState={location.state as CompleteResetPasswordLocationState}
     />
   );

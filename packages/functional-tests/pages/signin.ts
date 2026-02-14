@@ -3,12 +3,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 import { expect } from '@playwright/test';
-import { BaseLayout } from './layout';
 import { getReactFeatureFlagUrl } from '../lib/react-flag';
 import { Credentials } from '../lib/targets';
+import { PasskeyPage } from './passkey';
 
-export class SigninPage extends BaseLayout {
+export class SigninPage extends PasskeyPage {
   readonly path = 'signin';
+
   get authenticationFormHeading() {
     return this.page.getByRole('heading', {
       name: /^Enter (?:authentication|security) code/,
@@ -141,6 +142,8 @@ export class SigninPage extends BaseLayout {
   }
 
   async fillOutEmailFirstForm(email: string) {
+    // Ensure the page is ready after a hard navigation.
+    await expect(this.emailTextbox).toBeVisible();
     await this.emailTextbox.fill(email);
     await this.emailFirstSubmitButton.click();
   }

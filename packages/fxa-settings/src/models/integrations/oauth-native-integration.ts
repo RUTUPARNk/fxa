@@ -38,6 +38,8 @@ export enum OAuthNativeClients {
   FirefoxDesktop = '5882386c6d801776',
   Fenix = 'a2270f727f45f648',
   Fennec = '3332a18d142636cb',
+  // For Android testing
+  ReferenceBrowser = '3c49430b43dfba77',
   // TODO: handle Thunderbird case better, FXA-10848
   Thunderbird = '8269bacd7bbc7f80',
 }
@@ -48,7 +50,7 @@ export enum OAuthNativeClients {
 export enum OAuthNativeServices {
   Sync = 'sync',
   Relay = 'relay',
-  AiWindow = 'aiwindow',
+  SmartWindow = 'smartwindow',
 }
 
 /**
@@ -101,17 +103,17 @@ export class OAuthNativeIntegration extends OAuthWebIntegration {
     );
   }
 
-  isFirefoxClientServiceAiWindow() {
+  isFirefoxClientServiceSmartWindow() {
     return (
       this.isFirefoxClient() &&
-      this.data.service === OAuthNativeServices.AiWindow
+      this.data.service === OAuthNativeServices.SmartWindow
     );
   }
 
   isFirefoxNonSync() {
     return (
       this.isFirefoxClientServiceRelay() ||
-      this.isFirefoxClientServiceAiWindow()
+      this.isFirefoxClientServiceSmartWindow()
     );
   }
 
@@ -119,7 +121,8 @@ export class OAuthNativeIntegration extends OAuthWebIntegration {
     return (
       this.clientInfo?.clientId === OAuthNativeClients.FirefoxIOS ||
       this.clientInfo?.clientId === OAuthNativeClients.Fenix ||
-      this.clientInfo?.clientId === OAuthNativeClients.Fennec
+      this.clientInfo?.clientId === OAuthNativeClients.Fennec ||
+      this.clientInfo?.clientId === OAuthNativeClients.ReferenceBrowser
     );
   }
 
@@ -141,8 +144,8 @@ export class OAuthNativeIntegration extends OAuthWebIntegration {
     if (this.isFirefoxClientServiceRelay()) {
       return { relay: {} };
     }
-    if (this.isFirefoxClientServiceAiWindow()) {
-      return { aiwindow: {} };
+    if (this.isFirefoxClientServiceSmartWindow()) {
+      return { smartwindow: {} };
     }
     if (this.isDefaultSyncService()) {
       return { sync: syncEngines || {} };
@@ -157,8 +160,8 @@ export class OAuthNativeIntegration extends OAuthWebIntegration {
     if (this.isFirefoxClientServiceRelay()) {
       return Constants.RELIER_FF_CLIENT_RELAY_SERVICE_NAME;
     }
-    if (this.isFirefoxClientServiceAiWindow()) {
-      return Constants.RELIER_FF_CLIENT_AI_MODE_SERVICE_NAME;
+    if (this.isFirefoxClientServiceSmartWindow()) {
+      return Constants.RELIER_FF_CLIENT_SMART_WINDOW_SERVICE_NAME;
     }
     // TODO: handle Thunderbird case better? FXA-10848
     return 'Firefox';

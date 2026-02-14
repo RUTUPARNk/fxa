@@ -470,6 +470,12 @@ const convictConf = convict({
       env: 'SMTP_MAX_CONNECTIONS',
       format: Number,
     },
+    sendingRate: {
+      default: 1000,
+      doc: 'Maximum number of ses messages to send per second.',
+      env: 'SMTP_MAX_SENDING_RATE',
+      format: Number,
+    },
     prependVerificationSubdomain: {
       enabled: {
         doc: 'Flag to prepend a verification subdomain to verification emails',
@@ -501,6 +507,11 @@ const convictConf = convict({
       default:
         'https://app.adjust.com/2uo1qc?campaign=fxa-conf-email&adgroup=ios&creative=button&fallback=https%3A%2F%2Fitunes.apple.com%2Fapp%2Fapple-store%2Fid989804926%3Fpt%3D373246%26ct%3Dadjust_tracker%26mt%3D8&utm_source=email',
     },
+    mozillaSupportUrl: {
+      doc: 'url to general Mozilla support page',
+      format: String,
+      default: 'https://support.mozilla.org',
+    },
     supportUrl: {
       doc: 'url to Mozilla account support page',
       format: String,
@@ -522,6 +533,12 @@ const convictConf = convict({
       doc: 'url to Mozilla Accounts privacy page',
       format: String,
       default: 'https://www.mozilla.org/privacy/mozilla-accounts/',
+    },
+    twoFactorSupportUrl: {
+      doc: 'url to support page about two factor auth',
+      format: String,
+      default:
+        'https://support.mozilla.org/kb/secure-mozilla-account-two-step-authentication',
     },
     passwordManagerInfoUrl: {
       doc: 'url to Firefox password manager information',
@@ -548,6 +565,12 @@ const convictConf = convict({
       env: 'UNSUBSCRIBE_EMAIL_LISTS_URL',
       default:
         'https://privacyportal.onetrust.com/webform/1350748f-7139-405c-8188-22740b3b5587/4ba08202-2ede-4934-a89e-f0b0870f95f0',
+    },
+    defaultSurveyUrl: {
+      doc: 'The default survey link',
+      format: String,
+      default:
+        'https://survey.alchemer.com/s3/6534408/Privacy-Security-Product-Cancellation-of-Service-Q4-21',
     },
     sesConfigurationSet: {
       doc:
@@ -597,12 +620,7 @@ const convictConf = convict({
       ignoreTemplates: {
         doc: 'Always ignore bounces from these email templates',
         format: Array,
-        default: [
-          'verifyLoginCode',
-          'verifyLogin',
-          'recovery',
-          'unblockCode',
-        ],
+        default: ['verifyLoginCode', 'verifyLogin', 'recovery', 'unblockCode'],
         env: 'BOUNCES_IGNORE_TEMPLATES',
       },
       deleteAccount: {
@@ -681,6 +699,12 @@ const convictConf = convict({
       format: Boolean,
       default: true,
       env: 'SMTP_METRICS_ENABLED',
+    },
+    fxaMailerDisableSend: {
+      doc: 'Array of templates that should not be supported by fxa mailer. Used to fallback to previous email sending if in a pinch.',
+      format: Array,
+      default: [''],
+      env: 'SMTP_FXA_MAILER_DISABLE_SEND',
     },
   },
   maxEventLoopDelay: {
@@ -1378,6 +1402,25 @@ const convictConf = convict({
         format: 'duration',
         default: '24 hours',
         env: 'FXA_REFRESH_TOKEN_UPDATE_AFTER',
+      },
+    },
+    tokenExchange: {
+      allowedClientIds: {
+        doc: 'Client IDs allowed to perform token exchange (only Firefox mobile clients as of FXA-12925)',
+        format: Array,
+        default: [
+          '1b1a3e44c54fbb58',
+          '3332a18d142636cb',
+          'a2270f727f45f648',
+          '3c49430b43dfba77',
+        ],
+        env: 'OAUTH_TOKEN_EXCHANGE_CLIENT_IDS',
+      },
+      allowedScopes: {
+        doc: 'Scopes that can be requested via token exchange grant type',
+        format: Array,
+        default: ['https://identity.mozilla.com/apps/relay'],
+        env: 'OAUTH_TOKEN_EXCHANGE_ALLOWED_SCOPES',
       },
     },
     git: {
@@ -2455,6 +2498,14 @@ const convictConf = convict({
       },
     },
   },
+  passkeys: {
+    enabled: {
+      default: false,
+      doc: 'Enable passkeys authentication feature',
+      env: 'PASSKEYS__ENABLED',
+      format: Boolean,
+    },
+  },
   twilio: {
     credentialMode: {
       default: '',
@@ -2621,7 +2672,7 @@ const convictConf = convict({
       env: 'MFA__ENABLED',
     },
     actions: {
-      default: ['test', '2fa', 'email', 'recovery_key', 'password'],
+      default: ['test', '2fa', 'email', 'recovery_key', 'password', 'passkeys'],
       doc: 'Actions protected by MFA',
       format: Array,
       env: 'MFA__ACTIONS',
@@ -2661,7 +2712,7 @@ const convictConf = convict({
       },
       step: {
         // The time interval to use. In this case 1 second
-        default: 1,
+        default: 5 * 60,
         doc: 'Overrides step otp options',
         format: Number,
         env: 'MFA__OTP__STEP',
@@ -2669,7 +2720,7 @@ const convictConf = convict({
       window: {
         // Number of steps contained in the window. In this case
         // 5 minutes worth of steps
-        default: 5 * 60,
+        default: 1,
         doc: 'Overrides window otp options',
         format: Number,
         env: 'MFA__OTP__WINDOW',
@@ -2703,6 +2754,10 @@ convictConf.set('smtp.accountSettingsUrl', `${baseUri}/settings`);
 convictConf.set(
   'smtp.accountRecoveryCodesUrl',
   `${baseUri}/settings/two_step_authentication/replace_codes`
+);
+convictConf.set(
+  'smpt.twoFactorSupportUrl',
+  'https://support.mozilla.org/kb/secure-mozilla-account-two-step-authentication'
 );
 convictConf.set('smtp.verificationUrl', `${baseUri}/verify_email`);
 convictConf.set('smtp.pushVerificationUrl', `${baseUri}/push/confirm_login`);

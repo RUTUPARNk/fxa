@@ -56,7 +56,7 @@ import {
   CartUidMismatchError,
 } from './cart.error';
 import { CartManager } from './cart.manager';
-import { CheckoutCustomerData, ResultCart } from './cart.types';
+import { ResultCart } from './cart.types';
 import {
   handleEligibilityStatusMap,
   convertStripePaymentMethodTypeToSubPlat,
@@ -74,6 +74,10 @@ import {
   UpgradeForSubscriptionNotFoundError,
   DetermineCheckoutAmountCustomerRequiredError,
   DetermineCheckoutAmountSubscriptionRequiredError,
+  PayWithStripeLatestInvoiceNotFoundOnSubscriptionError,
+  PayWithPaypalNullCurrencyError,
+  PayWithStripeNullCurrencyError,
+  UpgradeSubscriptionNullCurrencyError,
 } from './checkout.error';
 import { isPaymentIntentId } from './util/isPaymentIntentId';
 import { isPaymentIntent } from './util/isPaymentIntent';
@@ -81,6 +85,11 @@ import { throwIntentFailedError } from './util/throwIntentFailedError';
 import type { AsyncLocalStorage } from 'async_hooks';
 import { AsyncLocalStorageCart } from './cart-als.provider';
 import type { CartStore } from './cart-als.types';
+import {
+  type CommonMetrics,
+  PaymentsGleanService,
+} from '@fxa/payments/metrics';
+import { isCancelInterstitialOffer } from './util/isCancelInterstitialOffer';
 
 @Injectable()
 export class CheckoutService {
@@ -104,6 +113,7 @@ export class CheckoutService {
     private promotionCodeManager: PromotionCodeManager,
     private subscriptionManager: SubscriptionManager,
     private paymentMethodManager: PaymentMethodManager,
+    private gleanService: PaymentsGleanService,
     @Inject(StatsDService) private statsd: StatsD
   ) {}
 
@@ -125,7 +135,6 @@ export class CheckoutService {
 
   async prePaySteps(
     cart: ResultCart,
-    customerData: CheckoutCustomerData,
     sessionUid?: string
   ): Promise<PrePayStepsResult> {
     const taxAddress = cart.taxAddress;
@@ -275,8 +284,11 @@ export class CheckoutService {
     uid: string;
     paymentProvider: 'stripe' | 'paypal';
     paymentForm: SubPlatPaymentMethodType;
+    isCancelInterstitialOffer: boolean;
+    requestArgs?: CommonMetrics;
   }) {
-    const { cart, version, subscription, uid, paymentProvider, paymentForm } = args;
+    const { cart, version, subscription, uid, paymentProvider, paymentForm } =
+      args;
     const { customer: customerId, currency } = subscription;
 
     await this.customerManager.setTaxId(customerId, currency);
@@ -294,6 +306,15 @@ export class CheckoutService {
 
     await this.cartManager.finishCart(cart.id, version, {});
 
+    if (args.isCancelInterstitialOffer && args.requestArgs) {
+      this.gleanService.recordGenericSubManageEvent({
+        eventName: 'recordCancelInterstitialOfferRedeemed',
+        uid,
+        subscriptionId: subscription.id,
+        commonMetrics: args.requestArgs,
+      });
+    }
+
     this.statsd.increment('subscription_success', {
       payment_provider: paymentProvider,
       payment_form: paymentForm,
@@ -305,8 +326,8 @@ export class CheckoutService {
   async payWithStripe(
     cart: ResultCart,
     confirmationTokenId: string,
-    customerData: CheckoutCustomerData,
     attribution: SubscriptionAttributionParams,
+    requestArgs: CommonMetrics,
     sessionUid?: string
   ) {
     const {
@@ -317,7 +338,7 @@ export class CheckoutService {
       version,
       price,
       eligibility,
-    } = await this.prePaySteps(cart, customerData, sessionUid);
+    } = await this.prePaySteps(cart, sessionUid);
 
     this.statsd.increment('stripe_subscription', {
       payment_provider: 'stripe',
@@ -328,7 +349,10 @@ export class CheckoutService {
         price.id,
         cart.currency
       );
-    assertNotNull(unitAmountForCurrency);
+    assertNotNull(
+      unitAmountForCurrency,
+      new PayWithStripeNullCurrencyError(cart.id, price.id)
+    );
 
     const subscription =
       eligibility.subscriptionEligibilityResult !== EligibilityStatus.UPGRADE
@@ -396,7 +420,10 @@ export class CheckoutService {
     try {
       assert(
         subscription.latest_invoice,
-        'latest_invoice does not exist on subscription'
+        new PayWithStripeLatestInvoiceNotFoundOnSubscriptionError(
+          cart.id,
+          subscription.id
+        )
       );
       const invoice = await this.invoiceManager.retrieve(
         subscription.latest_invoice
@@ -460,7 +487,8 @@ export class CheckoutService {
         const paymentMethod = await this.paymentMethodManager.retrieve(
           intent.payment_method
         );
-        const paymentForm = convertStripePaymentMethodTypeToSubPlat(paymentMethod);
+        const paymentForm =
+          convertStripePaymentMethodTypeToSubPlat(paymentMethod);
 
         await this.postPaySteps({
           cart,
@@ -469,6 +497,11 @@ export class CheckoutService {
           uid,
           paymentProvider: 'stripe',
           paymentForm,
+          isCancelInterstitialOffer: isCancelInterstitialOffer(
+            eligibility.subscriptionEligibilityResult,
+            attribution.session_entrypoint
+          ),
+          requestArgs,
         });
       } else if (intent.status === 'requires_payment_method') {
         const errorCode = isPaymentIntent(intent)
@@ -498,8 +531,8 @@ export class CheckoutService {
 
   async payWithPaypal(
     cart: ResultCart,
-    customerData: CheckoutCustomerData,
     attribution: SubscriptionAttributionParams,
+    requestArgs: CommonMetrics,
     sessionUid?: string,
     token?: string
   ) {
@@ -511,7 +544,7 @@ export class CheckoutService {
       price,
       version,
       eligibility,
-    } = await this.prePaySteps(cart, customerData, sessionUid);
+    } = await this.prePaySteps(cart, sessionUid);
 
     const paypalSubscriptions =
       await this.subscriptionManager.getCustomerPayPalSubscriptions(
@@ -530,7 +563,10 @@ export class CheckoutService {
         price.id,
         cart.currency
       );
-    assertNotNull(unitAmountForCurrency);
+    assertNotNull(
+      unitAmountForCurrency,
+      new PayWithPaypalNullCurrencyError(cart.id, price.id)
+    );
 
     this.statsd.increment('stripe_subscription', {
       payment_provider: 'paypal',
@@ -637,6 +673,11 @@ export class CheckoutService {
         uid,
         paymentProvider: 'paypal',
         paymentForm: SubPlatPaymentMethodType.PayPal,
+        isCancelInterstitialOffer: isCancelInterstitialOffer(
+          eligibility.subscriptionEligibilityResult,
+          attribution.session_entrypoint
+        ),
+        requestArgs,
       });
     } else {
       throw new InvalidInvoiceStateCheckoutError(
@@ -678,7 +719,10 @@ export class CheckoutService {
         toPriceId,
         cart.currency
       );
-    assertNotNull(unitAmountForCurrency);
+    assertNotNull(
+      unitAmountForCurrency,
+      new UpgradeSubscriptionNullCurrencyError(cart.id, toPriceId)
+    );
 
     const upgradedSubscription = await this.subscriptionManager.update(
       upgradeSubscription.id,

@@ -2,7 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 import { ResultCart } from '@fxa/payments/cart';
-import Stripe from 'stripe';
 
 export const CheckoutTypes = [
   'new_account',
@@ -11,21 +10,14 @@ export const CheckoutTypes = [
   'unknown',
 ] as const;
 export type CheckoutTypesType = (typeof CheckoutTypes)[number];
-import { SubPlatPaymentMethodType } from '@fxa/payments/customer';
+import { type TaxAddress } from '@fxa/payments/customer';
 
 export const PaymentProvidersTypePartial = [
-  'card',
+  'stripe',
   'google_iap',
   'apple_iap',
-  'external_paypal',
-  'link',
+  'paypal',
 ] as const;
-export type PaymentProvidersType =
-  | Stripe.PaymentMethod.Type
-  | SubPlatPaymentMethodType
-  | 'google_iap'
-  | 'apple_iap'
-  | 'external_paypal';
 
 export type CommonMetrics = {
   ipAddress: string;
@@ -53,6 +45,48 @@ export type ExperimentationData = {
 export type CmsMetricsData = {
   productId: string;
   priceId: string;
+};
+
+export type SubPlatCmsMetricsData = {
+  offeringId?: string;
+  interval?: string;
+};
+
+export type StripeMetricsData = {
+  customerId?: string;
+  couponCode?: string;
+  currency?: string;
+  taxAddress?: TaxAddress;
+  productId?: string;
+  priceId?: string;
+};
+
+export type AccountsMetricsData = {
+  uid: string;
+  metricsOptOut: boolean;
+  locale?: string;
+};
+
+export type SessionMetricsData = {
+  locale?: string;
+  ipAddress: string;
+  deviceType: string;
+  userAgent: string;
+};
+
+export type GenericGleanSubManageEvent = {
+  eventName: string;
+  uid: string;
+  commonMetrics: CommonMetrics;
+  subscriptionId?: string;
+};
+
+export type GleanMetricsData = {
+  stripe: StripeMetricsData;
+  accounts: AccountsMetricsData;
+  cms: SubPlatCmsMetricsData;
+  session: SessionMetricsData;
+  experimentation: ExperimentationData;
 };
 
 export enum CancellationReason {

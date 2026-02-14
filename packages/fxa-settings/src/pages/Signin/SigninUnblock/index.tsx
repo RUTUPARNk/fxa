@@ -132,7 +132,9 @@ export const SigninUnblock = ({
         lastLogin: Date.now(),
         sessionToken: data.signIn.sessionToken,
         verified: isFullyVerified,
+        sessionVerified: data.signIn.sessionVerified,
         metricsEnabled: data.signIn.metricsEnabled,
+        hasPassword: true,
       };
 
       storeAccountData(accountData);
@@ -179,7 +181,7 @@ export const SigninUnblock = ({
           navigateWithQuery(`/signin`, {
             state: {
               email,
-              // TODO: in FXA-9177, retrieve hasLinkedAccount and hasPassword from Apollo cache
+              // TODO: in FXA-9177, consider retrieving hasLinkedAccount and hasPassword from localStorage
               hasLinkedAccount,
               hasPassword,
               localizedErrorMessage,
@@ -211,6 +213,8 @@ export const SigninUnblock = ({
   const cmsInfo = integration.getCmsInfo();
   const title = cmsInfo?.SigninUnblockCodePage?.pageTitle;
   const splitLayout = cmsInfo?.SigninUnblockCodePage?.splitLayout;
+  const additionalAccessibilityInfo =
+    cmsInfo?.shared.additionalAccessibilityInfo;
 
   return (
     <AppLayout {...{ cmsInfo, title, splitLayout, setCurrentSplitLayout }}>
@@ -222,6 +226,8 @@ export const SigninUnblock = ({
           cmsLogoAltText: cmsInfo?.shared.logoAltText,
           cmsHeadline: cmsInfo?.SigninUnblockCodePage?.headline,
           cmsDescription: cmsInfo?.SigninUnblockCodePage?.description,
+          cmsHeadlineFontSize: cmsInfo?.shared.headlineFontSize,
+          cmsHeadlineTextColor: cmsInfo?.shared.headlineTextColor,
         }}
       />
       {bannerErrorMessage && (
@@ -238,13 +244,8 @@ export const SigninUnblock = ({
         </p>
       </FtlMsg>
 
-      {integration.isFirefoxClientServiceRelay() && (
-        <FtlMsg id="signin-unblock-desktop-relay">
-          <p className="text-sm mt-2">
-            Firefox will try sending you back to use an email mask after you
-            sign in.
-          </p>
-        </FtlMsg>
+      {additionalAccessibilityInfo && (
+        <p className="text-sm mt-2">{additionalAccessibilityInfo}</p>
       )}
 
       <FormVerifyCode

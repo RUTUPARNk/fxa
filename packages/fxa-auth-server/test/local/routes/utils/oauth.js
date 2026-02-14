@@ -28,6 +28,7 @@ const MOCK_DEVICE_ID = 'a72ed885e66cb9c96a12fde247112daa';
 describe('newTokenNotification', () => {
   let db;
   let mailer;
+  let fxaMailer;
   let devices;
   let request;
   let credentials;
@@ -52,6 +53,8 @@ describe('newTokenNotification', () => {
       uid: MOCK_UID,
     });
     mailer = mocks.mockMailer();
+    fxaMailer = mocks.mockFxaMailer();
+    mocks.mockOAuthClientInfo();
     devices = mocks.mockDevices();
     credentials = {
       uid: MOCK_UID,
@@ -67,7 +70,7 @@ describe('newTokenNotification', () => {
   it('creates a device and sends an email with credentials uid', async () => {
     await oauthUtils.newTokenNotification(db, mailer, devices, request, grant);
 
-    assert.equal(mailer.sendNewDeviceLoginEmail.callCount, 1);
+    assert.equal(fxaMailer.sendNewDeviceLoginEmail.callCount, 1);
     assert.equal(devices.upsert.callCount, 1, 'created a device');
     const args = devices.upsert.args[0];
     assert.equal(
@@ -85,7 +88,7 @@ describe('newTokenNotification', () => {
     });
     await oauthUtils.newTokenNotification(db, mailer, devices, request, grant);
 
-    assert.equal(mailer.sendNewDeviceLoginEmail.callCount, 0);
+    assert.equal(fxaMailer.sendNewDeviceLoginEmail.callCount, 0);
     assert.equal(devices.upsert.callCount, 1, 'created a device');
   });
 
@@ -94,7 +97,7 @@ describe('newTokenNotification', () => {
     request = mocks.mockRequest({ credentials });
     await oauthUtils.newTokenNotification(db, mailer, devices, request, grant);
 
-    assert.equal(mailer.sendNewDeviceLoginEmail.callCount, 1);
+    assert.equal(fxaMailer.sendNewDeviceLoginEmail.callCount, 1);
     assert.equal(devices.upsert.callCount, 1, 'created a device');
   });
 
@@ -102,7 +105,7 @@ describe('newTokenNotification', () => {
     grant.scope = 'profile';
     await oauthUtils.newTokenNotification(db, mailer, devices, request, grant);
 
-    assert.equal(mailer.sendNewDeviceLoginEmail.callCount, 0);
+    assert.equal(fxaMailer.sendNewDeviceLoginEmail.callCount, 0);
     assert.equal(devices.upsert.callCount, 0);
   });
 
@@ -113,7 +116,7 @@ describe('newTokenNotification', () => {
     request = mocks.mockRequest({ credentials });
     await oauthUtils.newTokenNotification(db, mailer, devices, request, grant);
 
-    assert.equal(mailer.sendNewDeviceLoginEmail.callCount, 1);
+    assert.equal(fxaMailer.sendNewDeviceLoginEmail.callCount, 1);
     assert.equal(devices.upsert.callCount, 1);
     const args = devices.upsert.args[0];
     assert.equal(args[1].refreshTokenId, MOCK_REFRESH_TOKEN_ID_2);
@@ -128,10 +131,47 @@ describe('newTokenNotification', () => {
     request = mocks.mockRequest({ credentials });
     await oauthUtils.newTokenNotification(db, mailer, devices, request, grant);
 
-    assert.equal(mailer.sendNewDeviceLoginEmail.callCount, 0);
+    assert.equal(fxaMailer.sendNewDeviceLoginEmail.callCount, 0);
     assert.equal(devices.upsert.callCount, 1);
     const args = devices.upsert.args[0];
     assert.equal(args[1].refreshTokenId, MOCK_REFRESH_TOKEN_ID_2);
     assert.equal(args[2].id, MOCK_DEVICE_ID);
+  });
+
+  it('creates a device but skips email when skipEmail option is true', async () => {
+    await oauthUtils.newTokenNotification(db, mailer, devices, request, grant, {
+      skipEmail: true,
+    });
+
+    assert.equal(fxaMailer.sendNewDeviceLoginEmail.callCount, 0);
+    assert.equal(devices.upsert.callCount, 1, 'created a device');
+    const args = devices.upsert.args[0];
+    assert.equal(
+      args[1].refreshTokenId,
+      request.auth.credentials.refreshTokenId
+    );
+  });
+
+  it('uses existingDeviceId when provided and credentials has no deviceId', async () => {
+    const EXISTING_DEVICE_ID = 'existingdevice123456';
+    // credentials without deviceId
+    credentials = {
+      uid: MOCK_UID,
+      refreshTokenId: MOCK_REFRESH_TOKEN,
+    };
+    request = mocks.mockRequest({ credentials });
+
+    await oauthUtils.newTokenNotification(db, mailer, devices, request, grant, {
+      existingDeviceId: EXISTING_DEVICE_ID,
+    });
+
+    // Should not send email since we have an existing device
+    assert.equal(fxaMailer.sendNewDeviceLoginEmail.callCount, 0);
+    assert.equal(devices.upsert.callCount, 1, 'updated the device');
+    const args = devices.upsert.args[0];
+    // Should use the existingDeviceId for the upsert
+    assert.equal(args[2].id, EXISTING_DEVICE_ID);
+    // credentials.deviceId should be set
+    assert.equal(args[1].deviceId, EXISTING_DEVICE_ID);
   });
 });

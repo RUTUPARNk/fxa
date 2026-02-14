@@ -365,6 +365,7 @@ describe('/recovery_email/status', () => {
   });
   const stripeHelper = mocks.mockStripeHelper();
   stripeHelper.hasActiveSubscription = sinon.fake.resolves(false);
+  mocks.mockOAuthClientInfo();
   const accountRoutes = makeRoutes({
     config: config,
     db: mockDB,
@@ -382,6 +383,7 @@ describe('/recovery_email/status', () => {
   describe('invalid email', () => {
     let mockRequest;
     beforeEach(() => {
+      mocks.mockOAuthClientInfo();
       mockRequest = mocks.mockRequest({
         credentials: {
           email: TEST_EMAIL_INVALID,
@@ -571,12 +573,19 @@ describe('/recovery_email/status', () => {
 describe('/recovery_email/resend_code', () => {
   const config = {};
   const secondEmailCode = crypto.randomBytes(16);
-  const mockDB = mocks.mockDB({ secondEmailCode: secondEmailCode });
+  const mockDB = mocks.mockDB({
+    secondEmailCode: secondEmailCode,
+    email: TEST_EMAIL,
+  });
   const mockLog = mocks.mockLog();
   mockLog.flowEvent = sinon.spy(() => {
     return Promise.resolve();
   });
   const mockMailer = mocks.mockMailer();
+  mocks.mockOAuthClientInfo({
+    fetch: sinon.stub().resolves({ name: 'Firefox' }),
+  });
+  const mockFxaMailer = mocks.mockFxaMailer();
   const mockMetricsContext = mocks.mockMetricsContext();
   const accountRoutes = makeRoutes({
     config: config,
@@ -590,6 +599,10 @@ describe('/recovery_email/resend_code', () => {
     const mockRequest = mocks.mockRequest({
       log: mockLog,
       metricsContext: mockMetricsContext,
+      uaBrowser: 'Firefox',
+      uaBrowserVersion: 52,
+      uaOS: 'Mac OS X',
+      uaOSVersion: '10.10',
       credentials: {
         uid: uuid.v4({}, Buffer.alloc(16)).toString('hex'),
         deviceId: 'wibble',
@@ -605,6 +618,7 @@ describe('/recovery_email/resend_code', () => {
       payload: {
         service: 'sync',
         metricsContext: {
+          deviceId: 'wibble',
           flowBeginTime: Date.now(),
           flowId:
             'F1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF103',
@@ -620,39 +634,42 @@ describe('/recovery_email/resend_code', () => {
         'email.verification.resent'
       );
 
-      assert.equal(mockMailer.sendVerifyEmail.callCount, 1);
-      const args = mockMailer.sendVerifyEmail.args[0];
-      assert.equal(args[2].uaBrowser, 'Firefox');
-      assert.equal(args[2].uaBrowserVersion, '52');
-      assert.equal(args[2].uaOS, 'Mac OS X');
-      assert.equal(args[2].uaOSVersion, '10.10');
-      assert.ok(knownIpLocation.location.city.has(args[2].location.city));
-      assert.equal(args[2].location.country, knownIpLocation.location.country);
-      assert.equal(args[2].ip, knownIpLocation.ip);
-      assert.equal(args[2].timeZone, knownIpLocation.location.tz);
-      assert.strictEqual(args[2].uaDeviceType, undefined);
-      assert.equal(args[2].deviceId, mockRequest.auth.credentials.deviceId);
-      assert.equal(args[2].flowId, mockRequest.payload.metricsContext.flowId);
+      assert.equal(mockFxaMailer.sendVerifyEmail.callCount, 1);
+      const args = mockFxaMailer.sendVerifyEmail.args[0];
+      assert.equal(args[0].device.uaBrowser, 'Firefox');
+      assert.equal(args[0].device.uaOS, 'Mac OS X');
+      assert.equal(args[0].device.uaOSVersion, '10.10');
+      assert.ok(knownIpLocation.location.city.has(args[0].location.city));
+      assert.equal(args[0].location.country, knownIpLocation.location.country);
+      assert.equal(args[0].timeZone, 'America/Los_Angeles');
+      assert.equal(args[0].deviceId, 'wibble');
+      assert.equal(args[0].flowId, mockRequest.payload.metricsContext.flowId);
       assert.equal(
-        args[2].flowBeginTime,
+        args[0].flowBeginTime,
         mockRequest.payload.metricsContext.flowBeginTime
       );
-      assert.equal(args[2].service, mockRequest.payload.service);
-      assert.equal(args[2].uid, mockRequest.auth.credentials.uid);
-      assert.equal(args[2].style, 'trailhead');
+      assert.equal(args[0].sync, mockRequest.payload.service === 'sync');
+      assert.equal(args[0].uid, mockRequest.auth.credentials.uid);
+      assert.equal(args[0].resume, mockRequest.payload.resume);
     }).then(() => {
-      mockMailer.sendVerifyEmail.resetHistory();
+      mockFxaMailer.sendVerifyEmail.resetHistory();
       mockLog.flowEvent.resetHistory();
     });
   });
 
   it('confirmation', () => {
+    const deviceId = uuid.v4({}, Buffer.alloc(16)).toString('hex');
     const mockRequest = mocks.mockRequest({
       log: mockLog,
       metricsContext: mockMetricsContext,
+      uaBrowser: 'Firefox',
+      uaBrowserVersion: '50',
+      uaOS: 'Android',
+      uaOSVersion: '6',
+      uaDeviceType: 'tablet',
       credentials: {
         uid: uuid.v4({}, Buffer.alloc(16)).toString('hex'),
-        deviceId: uuid.v4({}, Buffer.alloc(16)).toString('hex'),
+        deviceId: deviceId,
         email: TEST_EMAIL,
         emailVerified: true,
         tokenVerified: false,
@@ -666,6 +683,7 @@ describe('/recovery_email/resend_code', () => {
       payload: {
         service: 'foo',
         metricsContext: {
+          deviceId: deviceId,
           flowBeginTime: Date.now(),
           flowId:
             'F1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF103',
@@ -681,21 +699,20 @@ describe('/recovery_email/resend_code', () => {
         'email.confirmation.resent'
       );
 
-      assert.equal(mockMailer.sendVerifyLoginEmail.callCount, 1);
-      const args = mockMailer.sendVerifyLoginEmail.args[0];
-      assert.equal(args[2].uaBrowser, 'Firefox');
-      assert.equal(args[2].uaBrowserVersion, '50');
-      assert.equal(args[2].uaOS, 'Android');
-      assert.equal(args[2].uaOSVersion, '6');
-      assert.strictEqual(args[2].uaDeviceType, 'tablet');
-      assert.equal(args[2].deviceId, mockRequest.auth.credentials.deviceId);
-      assert.equal(args[2].flowId, mockRequest.payload.metricsContext.flowId);
+      assert.equal(mockFxaMailer.sendVerifyLoginEmail.callCount, 1);
+      const args = mockFxaMailer.sendVerifyLoginEmail.args[0];
+      assert.equal(args[0].device.uaBrowser, 'Firefox');
+      assert.equal(args[0].device.uaOS, 'Android');
+      assert.equal(args[0].device.uaOSVersion, '6');
+      assert.equal(args[0].deviceId, mockRequest.auth.credentials.deviceId);
+      assert.equal(args[0].flowId, mockRequest.payload.metricsContext.flowId);
       assert.equal(
-        args[2].flowBeginTime,
+        args[0].flowBeginTime,
         mockRequest.payload.metricsContext.flowBeginTime
       );
-      assert.equal(args[2].service, mockRequest.payload.service);
-      assert.equal(args[2].uid, mockRequest.auth.credentials.uid);
+      assert.equal(args[0].sync, mockRequest.payload.service === 'sync');
+      assert.equal(args[0].uid, mockRequest.auth.credentials.uid);
+      assert.equal(args[0].clientName, 'Firefox');
     });
   });
 });
@@ -738,6 +755,8 @@ describe('/recovery_email/verify_code', () => {
   };
   const mockDB = mocks.mockDB(dbData, dbErrors);
   const mockMailer = mocks.mockMailer();
+  mocks.mockOAuthClientInfo();
+  const mockFxaMailer = mocks.mockFxaMailer();
   const mockPush = mocks.mockPush();
   const mockCustoms = mocks.mockCustoms();
   const verificationReminders = mocks.mockVerificationReminders();
@@ -763,6 +782,8 @@ describe('/recovery_email/verify_code', () => {
     mockLog.notifyAttachedServices.resetHistory();
     mockMailer.sendPostVerifyEmail.resetHistory();
     mockMailer.sendVerifySecondaryCodeEmail.resetHistory();
+    mockFxaMailer.sendPostVerifyEmail.resetHistory();
+    mockFxaMailer.sendVerifySecondaryCodeEmail.resetHistory();
     mockPush.notifyAccountUpdated.resetHistory();
     verificationReminders.delete.resetHistory();
   });
@@ -792,15 +813,15 @@ describe('/recovery_email/verify_code', () => {
         assert.equal(args[2].userAgent, 'test user-agent');
 
         assert.equal(
-          mockMailer.sendPostVerifyEmail.callCount,
+          mockFxaMailer.sendPostVerifyEmail.callCount,
           1,
           'sendPostVerifyEmail was called once'
         );
         assert.equal(
-          mockMailer.sendPostVerifyEmail.args[0][2].service,
-          mockRequest.payload.service
+          mockFxaMailer.sendPostVerifyEmail.args[0][0].sync,
+          mockRequest.payload.service === 'sync'
         );
-        assert.equal(mockMailer.sendPostVerifyEmail.args[0][2].uid, uid);
+        assert.equal(mockFxaMailer.sendPostVerifyEmail.args[0][0].uid, uid);
 
         assert.equal(
           mockLog.activityEvent.callCount,
@@ -823,6 +844,8 @@ describe('/recovery_email/verify_code', () => {
             service: 'sync',
             uid: uid.toString('hex'),
             userAgent: 'test user-agent',
+            sigsciRequestId: 'test-sigsci-id',
+            clientJa4: 'test-ja4',
             productId: undefined,
             planId: undefined,
             deviceId: undefined,
@@ -948,7 +971,7 @@ describe('/recovery_email/verify_code', () => {
         );
 
         assert.equal(verificationReminders.delete.callCount, 1);
-        assert.equal(mockMailer.sendPostVerifyEmail.callCount, 1);
+        assert.equal(mockFxaMailer.sendPostVerifyEmail.callCount, 1);
         assert.equal(mockPush.notifyAccountUpdated.callCount, 1);
 
         assert.equal(JSON.stringify(response), '{}');
@@ -1069,6 +1092,8 @@ describe('/recovery_email/verify_code', () => {
             region: 'California',
             service: 'sync',
             userAgent: 'test user-agent',
+            sigsciRequestId: 'test-sigsci-id',
+            clientJa4: 'test-ja4',
             uid: uid.toString('hex'),
           },
           'event data was correct'
@@ -1107,19 +1132,13 @@ describe('/recovery_email/verify_code', () => {
 describe('/recovery_email', () => {
   const uid = uuid.v4({}, Buffer.alloc(16)).toString('hex');
   const mockLog = mocks.mockLog();
-  let dbData,
-    accountRoutes,
-    mockDB,
-    mockRequest,
-    route,
-    otpUtils,
-    stripeHelper,
-    mockAccountEventManager;
+  let dbData, accountRoutes, mockDB, mockRequest, route, stripeHelper;
   const mockMailer = mocks.mockMailer();
   const mockPush = mocks.mockPush();
   const mockCustoms = mocks.mockCustoms();
 
   beforeEach(() => {
+    mocks.mockOAuthClientInfo();
     mockRequest = mocks.mockRequest({
       credentials: {
         uid: uuid.v4({}, Buffer.alloc(16)).toString('hex'),
@@ -1143,7 +1162,6 @@ describe('/recovery_email', () => {
     mockDB = mocks.mockDB(dbData);
     stripeHelper = mocks.mockStripeHelper();
     stripeHelper.hasActiveSubscription = sinon.fake.resolves(false);
-    mockAccountEventManager = mocks.mockAccountEventsManager();
     accountRoutes = makeRoutes({
       checkPassword: function () {
         return Promise.resolve(true);
@@ -1160,278 +1178,10 @@ describe('/recovery_email', () => {
       push: mockPush,
       stripeHelper,
     });
-
-    otpUtils = require('../../../lib/routes/utils/otp').default(
-      {},
-      { histogram: () => {} }
-    );
   });
 
   afterEach(() => {
     mocks.unMockAccountEventsManager();
-  });
-
-  describe('/recovery_email', () => {
-    beforeEach(() => {
-      mockDB.getSecondaryEmail = sinon.spy(() => {
-        return Promise.reject(error.unknownSecondaryEmail());
-      });
-
-      mockDB.createEmail.resetHistory();
-      mockDB.deleteAccount.resetHistory();
-      mockMailer.sendVerifySecondaryCodeEmail.resetHistory();
-      mockDB.accountEmails.resetHistory();
-      mockDB.setPrimaryEmail.resetHistory();
-      mockPush.notifyProfileUpdated.resetHistory();
-      mockMailer.sendPostChangePrimaryEmail.resetHistory();
-    });
-
-    it('should store reservation in redis and send verification email', () => {
-      route = getRoute(accountRoutes, '/recovery_email');
-      return runTest(route, mockRequest, (response) => {
-        assert.ok(response);
-        // grab the injected redis and route key helper
-        const injectedRedis = accountRoutes.__redis;
-        // Reconstruct expected key format locally to avoid importing the route factory
-        const toRedisSecondaryEmailReservationKey = (email) =>
-          `secondary_email:reservation:${normalizeEmail(email)}`;
-
-        assert.equal(injectedRedis.set.callCount, 1, 'call redis.set');
-        const args = injectedRedis.set.args[0];
-        assert.equal(
-          args[0],
-          toRedisSecondaryEmailReservationKey(TEST_EMAIL_ADDITIONAL)
-        );
-        // uid string in route is stringified; use string here
-        assert.include(args[1], '"uid"');
-        assert.include(args[1], '"secret"');
-        assert.equal(args[2], 'EX');
-        assert.equal(args[4], 'NX');
-
-        assert.equal(
-          mockMailer.sendVerifySecondaryCodeEmail.callCount,
-          1,
-          'call mailer.sendVerifySecondaryCodeEmail'
-        );
-        assert.equal(
-          mockMailer.sendVerifySecondaryCodeEmail.args[0][2].deviceId,
-          mockRequest.auth.credentials.deviceId
-        );
-        assert.equal(
-          mockMailer.sendVerifySecondaryCodeEmail.args[0][2].uid,
-          mockRequest.auth.credentials.uid
-        );
-
-        // TODO: Should we create a new security event for the reservation?
-        // Should we actually record the add event here even if not added to db, and 'confirm' event later?
-        assert.equal(
-          mockAccountEventManager.recordSecurityEvent.callCount,
-          0,
-          'no security event recorded'
-        );
-      });
-    });
-
-    it('should fail with unverified primary email', () => {
-      route = getRoute(accountRoutes, '/recovery_email');
-      mockRequest.auth.credentials.emailVerified = false;
-      return runTest(route, mockRequest).then(
-        () =>
-          assert.fail(
-            'Should have failed adding secondary email with unverified primary email'
-          ),
-        (err) => assert.equal(err.errno, 104, 'unconfirmed account')
-      );
-    });
-
-    it('should fail when adding email that already belongs to the account', () => {
-      route = getRoute(accountRoutes, '/recovery_email');
-      mockRequest.payload.email = TEST_EMAIL;
-
-      return runTest(route, mockRequest).then(
-        () =>
-          assert.fail(
-            'Should have failed when adding an email that is the same as your primary'
-          ),
-        (err) =>
-          assert.equal(
-            err.errno,
-            139,
-            'add secondary email that is same as your primary'
-          )
-      );
-    });
-
-    it('should fail when adding email that already belongs to the account, and is not your primary', () => {
-      route = getRoute(accountRoutes, '/recovery_email');
-      mockRequest.payload.email = TEST_EMAIL_ADDITIONAL;
-      mockDB.account = sinon.spy(() => {
-        return Promise.resolve({
-          emails: [
-            {
-              isPrimary: true,
-              email: TEST_EMAIL,
-            },
-            {
-              isPrimary: false,
-              email: TEST_EMAIL_ADDITIONAL,
-            },
-          ],
-        });
-      });
-
-      return runTest(route, mockRequest).then(
-        () =>
-          assert.fail(
-            'Should have failed when adding an email that already belongs to the account'
-          ),
-        (err) => assert.equal(err.errno, 189, 'already exists on your account')
-      );
-    });
-
-    it('should fail when adding secondary email when the account is at its max', () => {
-      route = getRoute(accountRoutes, '/recovery_email');
-      mockDB.account = sinon.spy(() => {
-        return Promise.resolve({
-          emails: Array(3).fill({
-            isPrimary: false,
-          }),
-        });
-      });
-
-      return runTest(route, mockRequest).then(
-        () =>
-          assert.fail(
-            'Should have failed when adding secondary email when the account is at its max'
-          ),
-        (err) =>
-          assert.equal(
-            err.errno,
-            188,
-            'reached the maximum allowed secondary emails'
-          )
-      );
-    });
-
-    it('creates a secondary email by first deleting an unverified account if another user has an unverified primary more than a day old and has no active subscription', () => {
-      mockDB.getSecondaryEmail = sinon.spy(() => {
-        return Promise.resolve({
-          isVerified: false,
-          isPrimary: true,
-          normalizedEmail: TEST_EMAIL,
-          createdAt: Date.now() - MS_IN_DAY,
-          uid: crypto.randomBytes(16),
-        });
-      });
-      route = getRoute(accountRoutes, '/recovery_email');
-      mockRequest.payload.email = TEST_EMAIL_ADDITIONAL;
-      // grab the injected redis and route key helper
-      const injectedRedis = accountRoutes.__redis;
-      // Reconstruct expected key format locally to avoid importing the route factory
-      const toRedisSecondaryEmailReservationKey = (email) =>
-        `secondary_email:reservation:${normalizeEmail(email)}`;
-
-      return runTest(route, mockRequest, (response) => {
-        assert.ok(response);
-        assert.equal(
-          mockDB.deleteAccount.callCount,
-          1,
-          'call db.deleteAccount'
-        );
-        assert.equal(injectedRedis.set.callCount, 1, 'call redis.set');
-        const args = injectedRedis.set.args[0];
-        assert.equal(
-          args[0],
-          toRedisSecondaryEmailReservationKey(TEST_EMAIL_ADDITIONAL)
-        );
-        // uid string in route is stringified; use string here
-        assert.include(args[1], '"uid"');
-        assert.include(args[1], '"secret"');
-        assert.equal(args[2], 'EX');
-        assert.equal(args[4], 'NX');
-        assert.equal(
-          mockMailer.sendVerifySecondaryCodeEmail.callCount,
-          1,
-          'call mailer.sendVerifySecondaryCodeEmail'
-        );
-      });
-    });
-
-    it('fails create email if another user unverified primary less than day old', () => {
-      mockDB.getSecondaryEmail = sinon.spy(() => {
-        return Promise.resolve({
-          isVerified: false,
-          isPrimary: true,
-          normalizedEmail: TEST_EMAIL,
-          createdAt: Date.now(),
-          uid: crypto.randomBytes(16),
-        });
-      });
-      route = getRoute(accountRoutes, '/recovery_email');
-      mockRequest.payload.email = TEST_EMAIL_ADDITIONAL;
-
-      return runTest(route, mockRequest).then(
-        () => assert.fail('Should have failed when creating email'),
-        (err) =>
-          assert.equal(
-            err.errno,
-            141,
-            'cannot add secondary email, newly created primary account'
-          )
-      );
-    });
-
-    it('fails to create the email if it is primary for an unverified account older than one day that has an active subscription', () => {
-      stripeHelper.hasActiveSubscription = sinon.fake.resolves(true);
-      mockDB.getSecondaryEmail = sinon.spy(() => {
-        return Promise.resolve({
-          isVerified: false,
-          isPrimary: true,
-          normalizedEmail: TEST_EMAIL,
-          createdAt: Date.now() - MS_IN_DAY,
-          uid: crypto.randomBytes(16),
-        });
-      });
-      route = getRoute(accountRoutes, '/recovery_email');
-      mockRequest.payload.email = TEST_EMAIL_ADDITIONAL;
-
-      return runTest(route, mockRequest).then(
-        () => assert.fail('Should have failed when creating email'),
-        (err) =>
-          assert.equal(
-            err.errno,
-            195,
-            'cannot add secondary email, unconfirmed account has active subscription'
-          )
-      );
-    });
-
-    it('clears reservation if there was an error sending verification email', () => {
-      route = getRoute(accountRoutes, '/recovery_email');
-      const injectedRedis = accountRoutes.__redis;
-      mockMailer.sendVerifySecondaryCodeEmail = sinon.spy(() => {
-        return Promise.reject(new Error('failed to send'));
-      });
-
-      return runTest(route, mockRequest, () => {
-        assert.fail('should have failed');
-      }).catch((err) => {
-        assert.equal(err.errno, 151, 'failed to send email error');
-        assert.equal(err.output.payload.code, 422);
-        assert.equal(
-          injectedRedis.del.callCount,
-          1,
-          'call authServerCacheRedis.del'
-        );
-        const args = injectedRedis.del.args[0];
-        const toRedisSecondaryEmailReservationKey = (email) =>
-          `secondary_email:reservation:${normalizeEmail(email)}`;
-        assert.equal(
-          args[0],
-          toRedisSecondaryEmailReservationKey(TEST_EMAIL_ADDITIONAL)
-        );
-      });
-    });
   });
 
   describe('/recovery_emails', () => {
@@ -1448,399 +1198,27 @@ describe('/recovery_email', () => {
       });
     });
   });
-
-  describe('/recovery_email/destroy', () => {
-    it('should delete email from account ', () => {
-      route = getRoute(accountRoutes, '/recovery_email/destroy');
-      return runTest(route, mockRequest, (response) => {
-        assert.ok(response);
-        assert.equal(mockDB.deleteEmail.callCount, 1, 'call db.deleteEmail');
-        sinon.assert.calledWithMatch(
-          mockAccountEventManager.recordSecurityEvent,
-          mockDB,
-          {
-            name: 'account.secondary_email_removed',
-            ipAddr: '63.245.221.32',
-            uid: mockRequest.auth.credentials.uid,
-            tokenId: mockRequest.auth.credentials.id,
-          }
-        );
-      });
-    });
-
-    it('should reset outstanding tokens on the account ', () => {
-      route = getRoute(accountRoutes, '/recovery_email/destroy');
-      return runTest(route, mockRequest, (response) => {
-        assert.ok(response);
-        assert.equal(
-          mockDB.resetAccountTokens.callCount,
-          1,
-          'call db.resetAccountTokens'
-        );
-      });
-    });
-
-    it('should send secondary email post delete notification, if email is verified', () => {
-      const tempEmail = 'anotherEmail@one.com';
-      mockRequest.payload = {
-        email: tempEmail,
-      };
-      mockDB.account = sinon.spy(() => {
-        return Promise.resolve({
-          uid: mockRequest.auth.credentials.uid,
-          isVerified: true,
-          isPrimary: false,
-          emails: [
-            {
-              normalizedEmail: TEST_EMAIL,
-              email: TEST_EMAIL,
-              isVerified: true,
-              isPrimary: true,
-            },
-            {
-              normalizedEmail: normalizeEmail(tempEmail),
-              email: tempEmail,
-              isVerified: true,
-              isPrimary: false,
-            },
-          ],
-        });
-      });
-      route = getRoute(accountRoutes, '/recovery_email/destroy');
-      return runTest(route, mockRequest, (response) => {
-        assert.ok(response);
-        assert.equal(mockDB.deleteEmail.callCount, 1, 'call db.deleteEmail');
-        assert.equal(
-          mockMailer.sendPostRemoveSecondaryEmail.callCount,
-          1,
-          'call mailer.sendVerifySecondaryCodeEmail'
-        );
-      });
-    });
-
-    it("shouldn't send secondary email post delete notification, if email is unverified", () => {
-      const tempEmail = 'anotherEmail@one.com';
-      mockRequest.payload = {
-        email: tempEmail,
-      };
-      mockDB.account = sinon.spy(() => {
-        return Promise.resolve({
-          uid: mockRequest.auth.credentials.uid,
-          isVerified: true,
-          isPrimary: false,
-          emails: [
-            {
-              normalizedEmail: TEST_EMAIL,
-              email: TEST_EMAIL,
-              isVerified: true,
-              isPrimary: true,
-            },
-            {
-              normalizedEmail: tempEmail,
-              email: tempEmail,
-              isVerified: false,
-              isPrimary: false,
-            },
-          ],
-        });
-      });
-      route = getRoute(accountRoutes, '/recovery_email/destroy');
-      return runTest(route, mockRequest, (response) => {
-        assert.ok(response);
-        assert.equal(mockDB.deleteEmail.callCount, 1, 'call db.deleteEmail');
-        assert.equal(
-          mockMailer.sendPostRemoveSecondaryEmail.callCount,
-          0,
-          "shouldn't call mailer.sendVerifySecondaryCodeEmail"
-        );
-      });
-    });
-
-    afterEach(() => {
-      mockDB.deleteEmail.resetHistory();
-      mockMailer.sendPostRemoveSecondaryEmail.resetHistory();
-    });
-  });
-
-  describe('/recovery_email/set_primary', () => {
-    it('should set primary email on account', () => {
-      stripeHelper.fetchCustomer = sinon.fake.returns(CUSTOMER_1);
-      stripeHelper.stripe = {
-        customers: { update: sinon.fake.returns(CUSTOMER_1_UPDATED) },
-      };
-
-      mockDB.getSecondaryEmail = sinon.spy(() => {
-        return Promise.resolve({
-          uid: mockRequest.auth.credentials.uid,
-          isVerified: true,
-          isPrimary: false,
-        });
-      });
-
-      route = getRoute(accountRoutes, '/recovery_email/set_primary');
-      return runTest(route, mockRequest, (response) => {
-        assert.ok(response);
-        assert.equal(
-          mockDB.setPrimaryEmail.callCount,
-          1,
-          'call db.setPrimaryEmail'
-        );
-        assert.equal(
-          mockPush.notifyProfileUpdated.callCount,
-          1,
-          'call db.notifyProfileUpdated'
-        );
-        assert.equal(
-          mockLog.notifyAttachedServices.callCount,
-          1,
-          'call db.notifyAttachedServices'
-        );
-        assert.equal(
-          mockMailer.sendPostChangePrimaryEmail.callCount,
-          1,
-          'call db.sendPostChangePrimaryEmail'
-        );
-
-        const args = mockLog.notifyAttachedServices.args[0];
-        assert.equal(
-          args.length,
-          3,
-          'log.notifyAttachedServices was passed three arguments'
-        );
-        assert.equal(
-          args[0],
-          'primaryEmailChanged',
-          'first argument was event name'
-        );
-        assert.equal(
-          args[1],
-          mockRequest,
-          'second argument was request object'
-        );
-        assert.equal(
-          args[2].uid,
-          mockRequest.auth.credentials.uid,
-          'third argument was event data with a uid'
-        );
-        assert.equal(
-          args[2].email,
-          TEST_EMAIL_ADDITIONAL,
-          'third argument was event data with new email'
-        );
-        assert.equal(stripeHelper.fetchCustomer.callCount, 1);
-        assert.equal(stripeHelper.stripe.customers.update.callCount, 1);
-        assert.calledWith(
-          mockAccountEventManager.recordSecurityEvent,
-          sinon.match.defined,
-          sinon.match({
-            name: 'account.primary_secondary_swapped',
-            ipAddr: '63.245.221.32',
-            uid: mockRequest.auth.credentials.uid,
-            tokenId: undefined,
-          })
-        );
-      });
-    });
-
-    it('should fail when setting email to email user does not own', () => {
-      mockDB.getSecondaryEmail = sinon.spy(() => {
-        return Promise.resolve({
-          uid: uuid.v4({}, Buffer.alloc(16)).toString('hex'),
-          isVerified: true,
-          isPrimary: false,
-        });
-      });
-
-      route = getRoute(accountRoutes, '/recovery_email/set_primary');
-      return runTest(route, mockRequest).then(
-        () => assert.fail('should have errored'),
-        (err) =>
-          assert.equal(
-            err.errno,
-            148,
-            'correct errno changing email to non account email'
-          )
-      );
-    });
-
-    it('should fail when setting email is unverified', () => {
-      mockDB.getSecondaryEmail = sinon.spy(() => {
-        return Promise.resolve({
-          uid: mockRequest.auth.credentials.uid,
-          isVerified: false,
-          isPrimary: false,
-        });
-      });
-
-      route = getRoute(accountRoutes, '/recovery_email/set_primary');
-      return runTest(route, mockRequest).then(
-        () => assert.fail('should have errored'),
-        (err) =>
-          assert.equal(
-            err.errno,
-            147,
-            'correct errno changing email to unverified email'
-          )
-      );
-    });
-
-    it('should fail when setting email has no password set', () => {
-      mockDB.getSecondaryEmail = sinon.spy(() => {
-        return Promise.resolve({
-          uid: mockRequest.auth.credentials.uid,
-          isVerified: true,
-          isPrimary: true,
-        });
-      });
-
-      mockRequest.auth.credentials.verifierSetAt = 0;
-
-      route = getRoute(accountRoutes, '/recovery_email/set_primary');
-      return runTest(route, mockRequest).then(
-        () => assert.fail('should have errored'),
-        (err) => assert.equal(err.errno, 104, 'unverified account errno')
-      );
-    });
-  });
-
-  describe('/recovery_email/secondary/verify_code', () => {
-    it('should verify a secondary email with valid otp code', async () => {
-      route = getRoute(accountRoutes, '/recovery_email/secondary/verify_code');
-      mockRequest.payload.code = otpUtils.generateOtpCode(
-        dbData.secondEmailCode,
-        otpOptions
-      );
-      const response = await runTest(route, mockRequest);
-
-      assert.ok(response);
-      assert.calledOnce(mockDB.account);
-      assert.calledOnce(mockDB.accountEmails);
-      assert.calledOnce(mockDB.verifyEmail);
-
-      const args = mockDB.verifyEmail.args[0];
-      assert.equal(args[1], dbData.secondEmailCode, 'correct email code sent');
-
-      assert.calledOnce(mockMailer.sendPostVerifySecondaryEmail);
-    });
-
-    it('fails for mismatched email', async () => {
-      route = getRoute(accountRoutes, '/recovery_email/secondary/verify_code');
-      mockRequest.payload.code = otpUtils.generateOtpCode(
-        dbData.secondEmailCode,
-        otpOptions
-      );
-      mockRequest.payload.email = 'notcorrectemail@a.com';
-
-      // With the expired reservation handling fix, this now returns
-      // "Invalid confirmation code" instead of "Unknown email"
-      // since there's no Redis reservation or DB record for this email
-      await assert.failsAsync(runTest(route, mockRequest), {
-        errno: 105,
-        message: 'Invalid confirmation code',
-      });
-    });
-
-    it('fails for invalid code', async () => {
-      route = getRoute(accountRoutes, '/recovery_email/secondary/verify_code');
-      mockRequest.payload.code = '000000';
-
-      await assert.failsAsync(runTest(route, mockRequest), {
-        errno: 105,
-        message: 'Invalid confirmation code',
-      });
-    });
-
-    it('returns invalid code error when Redis reservation expired and no DB record', async () => {
-      const uid = uuid.v4({}, Buffer.alloc(16)).toString('hex');
-      const email = TEST_EMAIL_ADDITIONAL;
-      const mockMailer = mocks.mockMailer();
-      const mockDB = mocks.mockDB({
-        email: TEST_EMAIL,
-        emailVerified: true,
-      });
-      // No accountEmails for this secondary email
-      mockDB.accountEmails = sinon.stub().resolves([
-        {
-          email: TEST_EMAIL,
-          normalizedEmail: normalizeEmail(TEST_EMAIL),
-          isVerified: true,
-          isPrimary: true,
-        },
-      ]);
-      const authServerCacheRedis = {
-        get: sinon.stub().resolves(null), // No Redis reservation (expired)
-        set: sinon.stub().resolves('OK'),
-        del: sinon.stub().resolves(1),
-      };
-      const routes = makeRoutes(
-        {
-          authServerCacheRedis,
-          mailer: mockMailer,
-          db: mockDB,
-        },
-        {}
-      );
-      route = getRoute(routes, '/mfa/recovery_email/secondary/verify_code');
-      const request = mocks.mockRequest({
-        credentials: { uid, email: TEST_EMAIL },
-        payload: { email, code: '123456' },
-      });
-
-      await assert.failsAsync(runTest(route, request), {
-        errno: error.ERRNO.INVALID_VERIFICATION_CODE,
-      });
-    });
-  });
-
-  describe('/recovery_email/secondary/resend_code', () => {
-    it('should resend otp code', async () => {
-      route = getRoute(accountRoutes, '/recovery_email/secondary/resend_code');
-
-      // For the legacy resend flow, ensure there is an unconfirmed DB record
-      mockDB.getSecondaryEmail = sinon.spy(() => {
-        return Promise.resolve({
-          isVerified: false,
-          emailCode: dbData.secondEmailCode,
-          uid: mockRequest.auth.credentials.uid,
-        });
-      });
-
-      mockMailer.sendVerifySecondaryCodeEmail = sinon.spy(() =>
-        Promise.resolve()
-      );
-
-      const response = await runTest(route, mockRequest);
-
-      assert.ok(response);
-      assert.calledOnce(mockDB.account);
-      assert.calledOnce(mockMailer.sendVerifySecondaryCodeEmail);
-
-      const expectedCode = otpUtils.generateOtpCode(
-        dbData.secondEmailCode,
-        otpOptions
-      );
-      const args = mockMailer.sendVerifySecondaryCodeEmail.args[0];
-      assert.equal(args[2].code, expectedCode, 'verification codes match');
-    });
-  });
-
-  it('fails to resend if email does not belong to account', async () => {
-    route = getRoute(accountRoutes, '/recovery_email/secondary/resend_code');
-    mockRequest.payload.email = 'notcorrectemail@a.com';
-
-    await assert.failsAsync(runTest(route, mockRequest), {
-      errno: 150,
-    });
-  });
 });
 
 describe('/mfa/recovery_email/secondary/resend_code', () => {
+  let fxaMailer;
+  beforeEach(() => {
+    mocks.mockOAuthClientInfo();
+    fxaMailer = mocks.mockFxaMailer();
+  });
+  afterEach(() => {
+    fxaMailer.sendVerifySecondaryCodeEmail.resetHistory();
+  });
   it('resends code when redis reservation exists for this uid', async () => {
     const uid = uuid.v4({}, Buffer.alloc(16)).toString('hex');
     const email = TEST_EMAIL_ADDITIONAL;
-    const normalized = normalizeEmail(email);
     const mockLog = mocks.mockLog();
     const mockMailer = mocks.mockMailer();
+    const mockDB = mocks.mockDB({
+      uid,
+      email: TEST_EMAIL,
+      emailVerified: true,
+    });
     const secret = 'abcd1234abcd1234abcd1234abcd1234';
 
     const authServerCacheRedis = {
@@ -1854,6 +1232,7 @@ describe('/mfa/recovery_email/secondary/resend_code', () => {
         authServerCacheRedis,
         mailer: mockMailer,
         log: mockLog,
+        db: mockDB,
       },
       {}
     );
@@ -1877,10 +1256,10 @@ describe('/mfa/recovery_email/secondary/resend_code', () => {
 
     const response = await runTest(route, request);
     assert.ok(response);
-    assert.calledOnce(mockMailer.sendVerifySecondaryCodeEmail);
-    const args = mockMailer.sendVerifySecondaryCodeEmail.args[0];
-    assert.equal(args[0][0].normalizedEmail, normalized);
-    assert.equal(args[2].code, expectedCode, 'verification codes match');
+    assert.calledOnce(fxaMailer.sendVerifySecondaryCodeEmail);
+    const args = fxaMailer.sendVerifySecondaryCodeEmail.args[0];
+    assert.equal(args[0].email, email);
+    assert.equal(args[0].code, expectedCode, 'verification codes match');
   });
 
   it('recreates reservation when expired and resends code', async () => {
@@ -1926,7 +1305,7 @@ describe('/mfa/recovery_email/secondary/resend_code', () => {
     assert.equal(setArgs[2], 'EX'); // Expiration flag
     assert.equal(setArgs[4], 'NX'); // Only set if not exists
     // Verify email was sent
-    assert.calledOnce(mockMailer.sendVerifySecondaryCodeEmail);
+    assert.calledOnce(fxaMailer.sendVerifySecondaryCodeEmail);
     assert.calledOnce(mockLog.info);
     assert.equal(
       mockLog.info.args[0][0],
@@ -1940,6 +1319,11 @@ describe('/mfa/recovery_email/secondary/resend_code', () => {
     const otherUid = uuid.v4({}, Buffer.alloc(16)).toString('hex');
     const email = TEST_EMAIL_ADDITIONAL;
     const mockMailer = mocks.mockMailer();
+    const mockDB = mocks.mockDB({
+      uid,
+      email: TEST_EMAIL,
+      emailVerified: true,
+    });
     const authServerCacheRedis = {
       get: sinon
         .stub()
@@ -1947,7 +1331,10 @@ describe('/mfa/recovery_email/secondary/resend_code', () => {
       set: sinon.stub().resolves('OK'),
       del: sinon.stub().resolves(1),
     };
-    const routes = makeRoutes({ authServerCacheRedis, mailer: mockMailer }, {});
+    const routes = makeRoutes(
+      { authServerCacheRedis, mailer: mockMailer, db: mockDB },
+      {}
+    );
     const route = getRoute(routes, '/mfa/recovery_email/secondary/resend_code');
     const request = mocks.mockRequest({
       credentials: { uid, email: TEST_EMAIL },
@@ -2000,7 +1387,7 @@ describe('/mfa/recovery_email/secondary/resend_code', () => {
     // Verify new reservation was created
     assert.calledOnce(authServerCacheRedis.set);
     // Verify email was sent
-    assert.calledOnce(mockMailer.sendVerifySecondaryCodeEmail);
+    assert.calledOnce(fxaMailer.sendVerifySecondaryCodeEmail);
     // Verify recreation was logged with correct reason
     assert.calledWith(mockLog.info, 'secondary_email.reservation_recreated', {
       uid,
@@ -2134,6 +1521,7 @@ describe('/mfa/recovery_email/secondary/resend_code', () => {
     const mockMailer = mocks.mockMailer();
     const mockLog = mocks.mockLog();
     const mockDB = mocks.mockDB({
+      uid,
       email: TEST_EMAIL,
       emailVerified: true,
     });
@@ -2141,9 +1529,9 @@ describe('/mfa/recovery_email/secondary/resend_code', () => {
       errno: error.ERRNO.SECONDARY_EMAIL_UNKNOWN,
     });
     // Simulate email send failure
-    mockMailer.sendVerifySecondaryCodeEmail = sinon
-      .stub()
-      .rejects(new Error('Email service unavailable'));
+    fxaMailer.sendVerifySecondaryCodeEmail.rejects(
+      new Error('Email service unavailable')
+    );
     const authServerCacheRedis = {
       get: sinon.stub().resolves(null), // No existing reservation
       set: sinon.stub().resolves('OK'),
@@ -2184,10 +1572,15 @@ describe('/mfa/recovery_email/secondary/resend_code', () => {
     const secret = 'existingsecret1234567890123456';
     const mockMailer = mocks.mockMailer();
     const mockLog = mocks.mockLog();
+    const mockDB = mocks.mockDB({
+      uid,
+      email: TEST_EMAIL,
+      emailVerified: true,
+    });
     // Simulate email send failure
-    mockMailer.sendVerifySecondaryCodeEmail = sinon
-      .stub()
-      .rejects(new Error('Email service unavailable'));
+    fxaMailer.sendVerifySecondaryCodeEmail.rejects(
+      new Error('Email service unavailable')
+    );
     const authServerCacheRedis = {
       get: sinon.stub().resolves(JSON.stringify({ uid, secret })), // Existing reservation
       set: sinon.stub().resolves('OK'),
@@ -2198,6 +1591,7 @@ describe('/mfa/recovery_email/secondary/resend_code', () => {
         authServerCacheRedis,
         mailer: mockMailer,
         log: mockLog,
+        db: mockDB,
       },
       {}
     );

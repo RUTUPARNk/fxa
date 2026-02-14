@@ -20,8 +20,12 @@ const { AccountEventsManager } = require('../lib/account-events');
 const { gleanMetrics } = require('../lib/metrics/glean');
 const { PriceManager } = require('@fxa/payments/customer');
 const { ProductConfigurationManager } = require('@fxa/shared/cms');
+const { FxaMailer } = require('../lib/senders/fxa-mailer');
 
 const proxyquire = require('proxyquire');
+const {
+  OAuthClientInfoServiceName,
+} = require('../lib/senders/oauth_client_info');
 const amplitudeModule = proxyquire('../lib/metrics/amplitude', {
   'fxa-shared/db/models/auth': {
     Account: {
@@ -355,6 +359,8 @@ module.exports = {
   unMockAccountEventsManager,
   mockPriceManager,
   mockProductConfigurationManager,
+  mockFxaMailer,
+  mockOAuthClientInfo,
 };
 
 function mockCustoms(errors) {
@@ -407,9 +413,10 @@ function mockDB(data, errors) {
             isPrimary: true,
           },
         ],
-        uid: data.uid,
+        uid: uid || data.uid, // Prefer the uid parameter, fall back to data.uid
         verifierSetAt: data.verifierSetAt ?? Date.now(),
         wrapWrapKb: data.wrapWrapKb,
+        metricsOptOutAt: data.metricsOptOutAt || null,
       });
     }),
     accountEmails: sinon.spy((uid) => {
@@ -524,13 +531,14 @@ function mockDB(data, errors) {
     }),
     createPasswordForgotToken: sinon.spy(() => {
       return Promise.resolve({
-        data: crypto.randomBytes(32).toString('hex'),
+        data: data.data || crypto.randomBytes(32).toString('hex'),
         passCode: data.passCode,
         id: data.passwordForgotTokenId,
         uid: data.uid,
         ttl: function () {
           return data.passwordForgotTokenTTL || 100;
         },
+        email: data.emailToHashWith || 'emailToHashWith@email.com',
       });
     }),
     createSessionToken: sinon.spy((opts) => {
@@ -735,6 +743,10 @@ function mockDB(data, errors) {
       return Promise.resolve({
         enabled: false,
       });
+    }),
+    getLinkedAccounts: sinon.spy((uid) => {
+      assert.ok(typeof uid === 'string');
+      return Promise.resolve(data.linkedAccounts || []);
     }),
   });
 }
@@ -966,6 +978,8 @@ function mockRequest(data, errors) {
     gatherMetricsContext: metricsContext.gather,
     headers: data.headers || {
       'user-agent': 'test user-agent',
+      'x-sigsci-requestid': 'test-sigsci-id',
+      'client-ja4': 'test-ja4',
     },
     info: {
       received: data.received || Date.now() - 1,
@@ -1123,4 +1137,87 @@ function mockProductConfigurationManager() {
   };
   Container.set(ProductConfigurationManager, productConfigurationManager);
   return productConfigurationManager;
+}
+
+/**
+ * Used to mock the FxaMailer, injecting the mock into the Container. Be sure
+ * to call this before the code under test requests an FxaMailer instance from
+ * the Container.
+ *
+ * `canSend` is defaulted to a stub that resolves to `false`, so email
+ * sending is disabled by default in tests. Call mock setup with an override to enable
+ * sending for specific tests.
+ * ```
+ * const mockFxaMailer = mocks.mockFxaMailer({ canSend: sinon.stub().resolves(true) });
+ * // or, if you don't need to spy on the method:
+ * const mockFxaMailer = mocks.mockFxaMailer({ canSend: true });
+ * ```
+ * @param {*} overrides
+ * @returns {object} The mock FxaMailer instance for spy and assertion use.
+ * @usage
+ *
+ * ``` ts
+ * const mockFxaMailer = mocks.mockFxaMailer();
+ * // arrange, act, assert
+ * sinon.assert.calledOnce(mockFxaMailer.sendRecoveryEmail);
+ * ```
+ */
+function mockFxaMailer(overrides) {
+  const mockFxaMailer = {
+    // add new email methods here!
+    canSend: sinon.stub().returns(true),
+    sendRecoveryEmail: sinon.stub().resolves(),
+    sendPasswordForgotOtpEmail: sinon.stub().resolves(),
+    sendPostVerifySecondaryEmail: sinon.stub().resolves(),
+    sendPostChangePrimaryEmail: sinon.stub().resolves(),
+    sendPostRemoveSecondaryEmail: sinon.stub().resolves(),
+    sendPostAddLinkedAccountEmail: sinon.stub().resolves(),
+    sendNewDeviceLoginEmail: sinon.stub().resolves(),
+    sendPostAddTwoStepAuthenticationEmail: sinon.stub().resolves(),
+    sendPostChangeTwoStepAuthenticationEmail: sinon.stub().resolves(),
+    sendPostNewRecoveryCodesEmail: sinon.stub().resolves(),
+    sendPostConsumeRecoveryCodeEmail: sinon.stub().resolves(),
+    sendLowRecoveryCodesEmail: sinon.stub().resolves(),
+    sendPostSigninRecoveryCodeEmail: sinon.stub().resolves(),
+    sendPostAddRecoveryPhoneEmail: sinon.stub().resolves(),
+    sendPostChangeRecoveryPhoneEmail: sinon.stub().resolves(),
+    sendPostRemoveRecoveryPhoneEmail: sinon.stub().resolves(),
+    sendPasswordResetRecoveryPhoneEmail: sinon.stub().resolves(),
+    sendPostSigninRecoveryPhoneEmail: sinon.stub().resolves(),
+    sendPostAddAccountRecoveryEmail: sinon.stub().resolves(),
+    sendPostChangeAccountRecoveryEmail: sinon.stub().resolves(),
+    sendPostRemoveAccountRecoveryEmail: sinon.stub().resolves(),
+    sendPasswordResetAccountRecoveryEmail: sinon.stub().resolves(),
+    sendPasswordResetWithRecoveryKeyPromptEmail: sinon.stub().resolves(),
+    sendPostVerifyEmail: sinon.stub().resolves(),
+    sendVerifyLoginCodeEmail: sinon.stub().resolves(),
+    sendVerifyShortCodeEmail: sinon.stub().resolves(),
+    sendVerifySecondaryCodeEmail: sinon.stub().resolves(),
+    sendVerifyLoginEmail: sinon.stub().resolves(),
+    sendVerifyEmail: sinon.stub().resolves(),
+    sendVerifyAccountChangeEmail: sinon.stub().resolves(),
+    sendUnblockCodeEmail: sinon.stub().resolves(),
+    sendPasswordResetEmail: sinon.stub().resolves(),
+    sendPasswordChangedEmail: sinon.stub().resolves(),
+    sendInactiveAccountFirstWarningEmail: sinon.stub().resolves(),
+    sendInactiveAccountSecondWarningEmail: sinon.stub().resolves(),
+    sendInactiveAccountFinalWarningEmail: sinon.stub().resolves(),
+    sendVerificationReminderFirstEmail: sinon.stub().resolves(),
+    sendVerificationReminderSecondEmail: sinon.stub().resolves(),
+    sendVerificationReminderFinalEmail: sinon.stub().resolves(),
+    sendCadReminderFirstEmail: sinon.stub().resolves(),
+    sendCadReminderSecondEmail: sinon.stub().resolves(),
+    ...overrides,
+  };
+  Container.set(FxaMailer, mockFxaMailer);
+  return mockFxaMailer;
+}
+
+function mockOAuthClientInfo(overrides) {
+  const mock = {
+    fetch: sinon.stub().resolves({ name: 'sync' }),
+    ...overrides,
+  };
+  Container.set(OAuthClientInfoServiceName, mock);
+  return mock;
 }

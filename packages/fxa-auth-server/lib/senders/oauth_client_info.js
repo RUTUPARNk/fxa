@@ -81,3 +81,5 @@ module.exports = (log, config) => {
     __clientCache: clientCache,
   };
 };
+
+module.exports.OAuthClientInfoServiceName = 'OAuthClientInfo';

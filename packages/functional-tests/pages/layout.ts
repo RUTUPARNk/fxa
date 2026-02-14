@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { Page } from '@playwright/test';
+import { Page, expect } from '@playwright/test';
 import { BaseTarget } from '../lib/targets/base';
 
 import {
@@ -19,7 +19,10 @@ export abstract class BaseLayout {
    */
   abstract get path(): string;
 
-  constructor(public page: Page, protected readonly target: BaseTarget) {}
+  constructor(
+    public page: Page,
+    protected readonly target: BaseTarget
+  ) {}
 
   protected get baseUrl() {
     return this.target.baseUrl;
@@ -71,36 +74,47 @@ export abstract class BaseLayout {
   }
 
   async checkWebChannelMessage(command: FirefoxCommand) {
-    await this.page.evaluate(async (command) => {
-      const noNotificationError = new Error(
-        `NoSuchBrowserNotification - ${command}`
+    // Retry across navigations — a client-side redirect after page.goto
+    // can destroy the execution context mid-evaluate.
+    await expect(async () => {
+      const messages = await this.page.evaluate(() =>
+        JSON.parse(sessionStorage.getItem('webChannelEvents') || '[]')
       );
+      const found = messages.find(
+        (x: { command: string }) => x.command === command
+      );
+      expect(found).toBeTruthy();
+    }).toPass({ timeout: 5000 });
+  }
 
-      await new Promise((resolve, reject) => {
-        const timeoutHandle = setTimeout(
-          () => reject(noNotificationError),
-          5000
-        );
+  async getWebChannelEvents(): Promise<
+    Array<{ command: string; data: Record<string, unknown> }>
+  > {
+    return await this.page.evaluate(() => {
+      return JSON.parse(sessionStorage.getItem('webChannelEvents') || '[]');
+    });
+  }
 
-        function findMessage() {
-          const messages = JSON.parse(
-            sessionStorage.getItem('webChannelEvents') || '[]'
-          );
-          const m = messages.find(
-            (x: { command: string }) => x.command === command
-          );
-
-          if (m) {
-            clearTimeout(timeoutHandle);
-            resolve(m);
-          } else {
-            setTimeout(findMessage, 50);
-          }
-        }
-
-        findMessage();
-      });
-    }, command);
+  /**
+   * Asserts that a web channel message with the given command was sent
+   * and contains the expected services object in its data.
+   */
+  async checkWebChannelMessageServices(
+    command: FirefoxCommand,
+    expectedServices: Record<string, unknown>
+  ) {
+    await this.checkWebChannelMessage(command);
+    const events = await this.getWebChannelEvents();
+    const event = events.find((e) => e.command === command);
+    if (!event) {
+      throw new Error(`No web channel event found for command: ${command}`);
+    }
+    const services = (event.data as { services?: unknown })?.services;
+    if (JSON.stringify(services) !== JSON.stringify(expectedServices)) {
+      throw new Error(
+        `Expected services ${JSON.stringify(expectedServices)} but got ${JSON.stringify(services)}`
+      );
+    }
   }
 
   async listenToWebChannelMessages() {
@@ -112,7 +126,7 @@ export abstract class BaseLayout {
         );
         events.push({
           command: detail.message.command,
-          detail: detail.message.data,
+          data: detail.message.data,
         });
         sessionStorage.setItem('webChannelEvents', JSON.stringify(events));
       }

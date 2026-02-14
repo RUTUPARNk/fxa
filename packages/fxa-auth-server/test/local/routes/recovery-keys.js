@@ -13,7 +13,16 @@ const { AppError: errors } = require('@fxa/accounts/errors');
 const proxyquire = require('proxyquire');
 const { OAUTH_SCOPE_OLD_SYNC } = require('fxa-shared/oauth/constants');
 
-let log, db, customs, mailer, glean, routes, route, request, response;
+let log,
+  db,
+  customs,
+  mailer,
+  fxaMailer,
+  glean,
+  routes,
+  route,
+  request,
+  response;
 const email = 'test@email.com';
 const recoveryKeyId = '000000';
 const recoveryData = '11111111111';
@@ -25,6 +34,7 @@ let mockAccountEventsManager;
 describe('POST /recoveryKey', () => {
   beforeEach(() => {
     mockAccountEventsManager = mocks.mockAccountEventsManager();
+    fxaMailer = mocks.mockFxaMailer();
   });
 
   afterEach(() => {
@@ -118,10 +128,10 @@ describe('POST /recoveryKey', () => {
     });
 
     it('called mailer.sendPostAddAccountRecoveryEmail correctly', () => {
-      assert.equal(mailer.sendPostAddAccountRecoveryEmail.callCount, 1);
-      const args = mailer.sendPostAddAccountRecoveryEmail.args[0];
-      assert.equal(args.length, 3);
-      assert.equal(args[0][0].email, email);
+      assert.equal(fxaMailer.sendPostAddAccountRecoveryEmail.callCount, 1);
+      const args = fxaMailer.sendPostAddAccountRecoveryEmail.args[0];
+      assert.equal(args.length, 1);
+      assert.equal(args[0].to, email);
     });
   });
 
@@ -140,7 +150,13 @@ describe('POST /recoveryKey', () => {
         },
       };
       response = await setup(
-        { db: { recoveryData, email } },
+        {
+          db: {
+            recoveryData,
+            email,
+            uid,
+          },
+        },
         {},
         '/recoveryKey',
         requestOptions
@@ -229,10 +245,10 @@ describe('POST /recoveryKey', () => {
     });
 
     it('called mailer.sendPostChangeAccountRecoveryEmail correctly', () => {
-      assert.equal(mailer.sendPostChangeAccountRecoveryEmail.callCount, 1);
-      const args = mailer.sendPostChangeAccountRecoveryEmail.args[0];
-      assert.equal(args.length, 3);
-      assert.equal(args[0][0].email, email);
+      assert.equal(fxaMailer.sendPostChangeAccountRecoveryEmail.callCount, 1);
+      const args = fxaMailer.sendPostChangeAccountRecoveryEmail.args[0];
+      assert.equal(args.length, 1);
+      assert.equal(args[0].to, email);
     });
   });
 
@@ -301,8 +317,8 @@ describe('POST /recoveryKey', () => {
       assert.equal(request.emitMetricsEvent.callCount, 0);
     });
 
-    it('did not call mailer.sendPostAddAccountRecoveryEmail', () => {
-      assert.equal(mailer.sendPostAddAccountRecoveryEmail.callCount, 0);
+    it('did not call fxaMailer.sendPostAddAccountRecoveryEmail', () => {
+      assert.equal(fxaMailer.sendPostAddAccountRecoveryEmail.callCount, 0);
     });
   });
 
@@ -398,10 +414,10 @@ describe('POST /recoveryKey', () => {
     });
 
     it('called mailer.sendPostAddAccountRecoveryEmail correctly', () => {
-      assert.equal(mailer.sendPostAddAccountRecoveryEmail.callCount, 1);
-      const args = mailer.sendPostAddAccountRecoveryEmail.args[0];
-      assert.equal(args.length, 3);
-      assert.equal(args[0][0].email, email);
+      assert.equal(fxaMailer.sendPostAddAccountRecoveryEmail.callCount, 1);
+      const args = fxaMailer.sendPostAddAccountRecoveryEmail.args[0];
+      assert.equal(args.length, 1);
+      assert.equal(args[0].to, email);
     });
 
     it('records security event', () => {
@@ -415,93 +431,6 @@ describe('POST /recoveryKey', () => {
           tokenId: undefined,
         })
       );
-    });
-  });
-
-  describe('should not verify invalid account recovery key', () => {
-    let error;
-
-    beforeEach(async () => {
-      mockAccountEventsManager = mocks.mockAccountEventsManager();
-      const requestOptions = {
-        credentials: { uid, email, tokenVerificationId: true },
-        log,
-        payload: { recoveryKeyId: recoveryKeyId, enabled: false },
-      };
-      try {
-        await setup(
-          { db: { email } },
-          {},
-          '/recoveryKey/verify',
-          requestOptions
-        );
-      } catch (e) {
-        error = e;
-      }
-    });
-    after(() => {
-      mocks.unMockAccountEventsManager();
-    });
-
-    it('records security event', () => {
-      assert.isDefined(error);
-      sinon.assert.calledWith(
-        mockAccountEventsManager.recordSecurityEvent,
-        sinon.match.defined,
-        sinon.match({
-          name: 'account.recovery_key_challenge_failure',
-          ipAddr: '63.245.221.32',
-          uid: uid,
-          tokenId: undefined,
-        })
-      );
-    });
-  });
-
-  describe('should fail for unverified session', () => {
-    beforeEach(() => {
-      mockAccountEventsManager = mocks.mockAccountEventsManager();
-    });
-
-    afterEach(() => {
-      mocks.unMockAccountEventsManager();
-    });
-
-    function makeUnverifiedReq() {
-      const requestOptions = {
-        credentials: { uid, email, tokenVerificationId: '1232311' },
-      };
-      return setup({ db: {} }, {}, '/recoveryKey', requestOptions);
-    }
-
-    it('returned the correct response', () => {
-      makeUnverifiedReq().then(assert.fail, (err) => {
-        assert.deepEqual(
-          err.errno,
-          errors.ERRNO.SESSION_UNVERIFIED,
-          'returns unverified session error'
-        );
-      });
-    });
-
-    it('records security event', () => {
-      makeUnverifiedReq().then(assert.fail, (err) => {
-        sinon.assert.calledWith(
-          mockAccountEventsManager.recordSecurityEvent,
-          sinon.match.defined,
-          sinon.match({
-            name: 'account.xxx',
-            ipAddr: '63.245.221.32',
-            uid: uid,
-            tokenId: undefined,
-          })
-        );
-        assert.deepEqual(
-          err.errno,
-          errors.ERRNO.SESSION_UNVERIFIED,
-          'returns unverified session error'
-        );
-      });
     });
   });
 });
@@ -724,6 +653,7 @@ describe('POST /recoveryKey/exists', () => {
 describe('DELETE /recoveryKey', () => {
   beforeEach(() => {
     mockAccountEventsManager = mocks.mockAccountEventsManager();
+    fxaMailer = mocks.mockFxaMailer();
   });
 
   afterEach(() => {
@@ -765,10 +695,10 @@ describe('DELETE /recoveryKey', () => {
     });
 
     it('called mailer.sendPostRemoveAccountRecoveryEmail correctly', () => {
-      assert.equal(mailer.sendPostRemoveAccountRecoveryEmail.callCount, 1);
-      const args = mailer.sendPostRemoveAccountRecoveryEmail.args[0];
-      assert.equal(args.length, 3);
-      assert.equal(args[0][0].email, email);
+      assert.equal(fxaMailer.sendPostRemoveAccountRecoveryEmail.callCount, 1);
+      const args = fxaMailer.sendPostRemoveAccountRecoveryEmail.args[0];
+      assert.equal(args.length, 1);
+      assert.equal(args[0].to, email);
     });
 
     it('recorded security event', () => {
@@ -787,29 +717,6 @@ describe('DELETE /recoveryKey', () => {
 });
 
 describe('POST /recoveryKey/hint', () => {
-  describe('should fail for unverified session', () => {
-    beforeEach(() => {
-      const requestOptions = {
-        method: 'POST',
-        credentials: { uid, email, tokenVerificationId: 'unverified' },
-        payload: { hint },
-        log,
-      };
-      return setup({ db: {} }, {}, '/recoveryKey/hint', requestOptions).then(
-        assert.fail,
-        (err) => (response = err)
-      );
-    });
-
-    it('returned the correct response', () => {
-      assert.equal(
-        response.errno,
-        errors.ERRNO.SESSION_UNVERIFIED,
-        'unverified session'
-      );
-    });
-  });
-
   describe('should fail for unknown recovery key', () => {
     beforeEach(() => {
       const requestOptions = {

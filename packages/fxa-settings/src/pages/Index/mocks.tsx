@@ -53,12 +53,12 @@ export function createMockIndexOAuthIntegration({
 export function createMockIndexOAuthNativeIntegration({
   isSync = true,
   isFirefoxClientServiceRelay = false,
-  isFirefoxClientServiceAiWindow = false,
+  isFirefoxClientServiceSmartWindow = false,
   cmsInfo,
 }: {
   isSync?: boolean;
   isFirefoxClientServiceRelay?: boolean;
-  isFirefoxClientServiceAiWindow?: boolean;
+  isFirefoxClientServiceSmartWindow?: boolean;
   cmsInfo?: RelierCmsInfo;
 } = {}): IndexIntegration {
   return {
@@ -66,9 +66,9 @@ export function createMockIndexOAuthNativeIntegration({
     isSync: () => isSync,
     getClientId: () => MOCK_CLIENT_ID,
     isFirefoxClientServiceRelay: () => isFirefoxClientServiceRelay,
-    isFirefoxClientServiceAiWindow: () => isFirefoxClientServiceAiWindow,
+    isFirefoxClientServiceSmartWindow: () => isFirefoxClientServiceSmartWindow,
     isFirefoxNonSync: () =>
-      isFirefoxClientServiceRelay || isFirefoxClientServiceAiWindow,
+      isFirefoxClientServiceRelay || isFirefoxClientServiceSmartWindow,
     getCmsInfo: () => cmsInfo,
     getLegalTerms: () => undefined,
     data: new OAuthIntegrationData(
@@ -85,7 +85,7 @@ export function createMockIndexWebIntegration(): IndexIntegration {
     isSync: () => false,
     getClientId: () => undefined,
     isFirefoxClientServiceRelay: () => false,
-    isFirefoxClientServiceAiWindow: () => false,
+    isFirefoxClientServiceSmartWindow: () => false,
     isFirefoxNonSync: () => false,
     getCmsInfo: () => undefined,
     getLegalTerms: () => undefined,
@@ -104,7 +104,6 @@ export const Subject = ({
   initialErrorBanner = '',
   initialSuccessBanner = '',
   initialTooltipMessage = '',
-  deeplink,
   isMobile = false,
   supportsKeysOptionalLogin = false,
 }: {
@@ -114,7 +113,6 @@ export const Subject = ({
   initialErrorBanner?: string;
   initialSuccessBanner?: string;
   initialTooltipMessage?: string;
-  deeplink?: string;
   isMobile?: boolean;
   supportsKeysOptionalLogin?: boolean;
 }) => {
@@ -142,7 +140,6 @@ export const Subject = ({
           setErrorBannerMessage,
           setSuccessBannerMessage,
           setTooltipErrorMessage,
-          deeplink,
           isMobile,
           useFxAStatusResult: mockUseFxAStatusResult,
         }}

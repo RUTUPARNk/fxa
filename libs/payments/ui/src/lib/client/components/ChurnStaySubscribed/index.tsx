@@ -8,7 +8,7 @@ import { Localized } from '@fluent/react';
 import * as Form from '@radix-ui/react-form';
 import Image from 'next/image';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 
 import { SubPlatPaymentMethodType } from '@fxa/payments/customer';
@@ -79,6 +79,8 @@ export function ChurnStaySubscribed({
   const [showResubscribeActionError, setResubscribeActionError] =
     useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const params = useParams();
+  const searchParams = useSearchParams();
   const {
     apiIdentifier,
     discountAmount,
@@ -111,7 +113,14 @@ export function ChurnStaySubscribed({
     setLoading(true);
     setResubscribeActionError(false);
 
-    const result = await redeemChurnCouponAction(uid, subscriptionId, locale);
+    const result = await redeemChurnCouponAction(
+      uid,
+      subscriptionId,
+      'stay_subscribed',
+      { ...params },
+      Object.fromEntries(searchParams),
+      locale
+    );
 
     if (result.redeemed) {
       // TODO: This is a workaround to match existing legacy behavior.
@@ -231,14 +240,16 @@ export function ChurnStaySubscribed({
 
             <div className="leading-6">
               {modalMessage && (
-                <p>
+                <div>
                   {modalMessage.map((line, i) => (
-                    <span key={i} className="my-2">
+                    <p key={i} className="my-2">
                       {line}
-                    </span>
+                      {i === modalMessage.length - 1 && (
+                        <span aria-hidden="true">*</span>
+                      )}
+                    </p>
                   ))}
-                  <span aria-hidden="true">*</span>
-                </p>
+                </div>
               )}
 
               <Localized

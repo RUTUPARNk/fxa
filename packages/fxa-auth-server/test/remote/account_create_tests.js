@@ -17,7 +17,7 @@ const {
 const {
   AppStoreSubscriptions,
 } = require('../../lib/payments/iap/apple-app-store/subscriptions');
-import jwt from '../../lib/oauth/jwt';
+const jwt = require('../../lib/oauth/jwt');
 
 // Note, intentionally not indenting for code review.
 [{ version: '' }, { version: 'V2' }].forEach((testOptions) => {
@@ -44,6 +44,8 @@ import jwt from '../../lib/oauth/jwt';
 
       Container.set(PlaySubscriptions, {});
       Container.set(AppStoreSubscriptions, {});
+      mocks.mockPriceManager();
+      mocks.mockProductConfigurationManager();
 
       server = await TestServer.start(config, false, {
         authServerMockDependencies: {
@@ -420,12 +422,6 @@ import jwt from '../../lib/oauth/jwt';
         .accountCreate(email, authPW, options)
         .then(assert.fail, (err) => {
           assert.equal(err.errno, 107, 'bad redirectTo rejected');
-        })
-        .then(() => {
-          return api.passwordForgotSendCode(email, options);
-        })
-        .then(assert.fail, (err) => {
-          assert.equal(err.errno, 107, 'bad redirectTo rejected');
         });
     });
 
@@ -441,14 +437,6 @@ import jwt from '../../lib/oauth/jwt';
 
       return api
         .accountCreate(email, authPW, options)
-        .then(assert.fail, (err) => {
-          assert.equal(err.errno, 107, 'bad redirectTo rejected');
-        })
-        .then(() => {
-          return api.passwordForgotSendCode(email, {
-            redirectTo: 'https://fakefirefox.com',
-          });
-        })
         .then(assert.fail, (err) => {
           assert.equal(err.errno, 107, 'bad redirectTo rejected');
         });

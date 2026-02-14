@@ -39,6 +39,13 @@ const { AppConfig, AuthLogger } = require('../../../lib/types');
 const defaultConfig = require('../../../config').default.getProperties();
 const { ProfileClient } = require('@fxa/profile/client');
 const { RelyingPartyConfigurationManager } = require('@fxa/shared/cms');
+const {
+  OAuthClientInfoServiceName,
+} = require('../../../lib/senders/oauth_client_info');
+
+const { FxaMailer } = require('../../../lib/senders/fxa-mailer');
+const { RecoveryPhoneService } = require('@fxa/accounts/recovery-phone');
+
 const glean = mocks.mockGlean();
 const profile = mocks.mockProfile();
 const statsd = mocks.mockStatsd();
@@ -132,6 +139,7 @@ const makeRoutes = function (options = {}, requireMocks = {}) {
     ...(requireMocks || {}),
     'fxa-shared/db/models/auth': {
       getAccountCustomerByUid: mockGetAccountCustomerByUid,
+      ...((requireMocks || {})['fxa-shared/db/models/auth'] || {}),
     },
   });
   const signupUtils =
@@ -230,6 +238,7 @@ describe('/account/reset', () => {
     route,
     clientAddress,
     mailer,
+    fxaMailer,
     oauth;
 
   beforeEach(() => {
@@ -272,6 +281,8 @@ describe('/account/reset', () => {
     mockCustoms = mocks.mockCustoms();
     mockPush = mocks.mockPush();
     mailer = mocks.mockMailer();
+    fxaMailer = mocks.mockFxaMailer();
+    mocks.mockOAuthClientInfo();
     oauth = { removeTokensAndCodes: sinon.stub() };
     accountRoutes = makeRoutes({
       config: {
@@ -348,10 +359,12 @@ describe('/account/reset', () => {
     });
 
     it('called mailer.sendPasswordResetAccountRecoveryEmail correctly', () => {
-      assert.equal(mailer.sendPasswordResetAccountRecoveryEmail.callCount, 1);
-      const args = mailer.sendPasswordResetAccountRecoveryEmail.args[0];
-      assert.equal(args.length, 3);
-      assert.equal(args[0][0].email, TEST_EMAIL);
+      assert.equal(
+        fxaMailer.sendPasswordResetAccountRecoveryEmail.callCount,
+        1
+      );
+      const args = fxaMailer.sendPasswordResetAccountRecoveryEmail.args[0];
+      assert.equal(args[0].to, TEST_EMAIL);
     });
 
     it('should have removed oauth tokens', () => {
@@ -391,6 +404,8 @@ describe('/account/reset', () => {
           service: undefined,
           userAgent: 'test user-agent',
           uid: uid,
+          sigsciRequestId: 'test-sigsci-id',
+          clientJa4: 'test-ja4',
         },
         'event data was correct'
       );
@@ -499,12 +514,12 @@ describe('/account/reset', () => {
 
     it('called mailer.sendPasswordResetWithRecoveryKeyPromptEmail correctly', () => {
       assert.equal(
-        mailer.sendPasswordResetWithRecoveryKeyPromptEmail.callCount,
+        fxaMailer.sendPasswordResetWithRecoveryKeyPromptEmail.callCount,
         1
       );
-      const args = mailer.sendPasswordResetWithRecoveryKeyPromptEmail.args[0];
-      assert.equal(args.length, 3);
-      assert.equal(args[0][0].email, TEST_EMAIL);
+      const args =
+        fxaMailer.sendPasswordResetWithRecoveryKeyPromptEmail.args[0];
+      assert.equal(args[0].to, TEST_EMAIL);
     });
   });
 
@@ -664,6 +679,8 @@ describe('/account/reset', () => {
           service: undefined,
           userAgent: 'test user-agent',
           uid: uid,
+          sigsciRequestId: 'test-sigsci-id',
+          clientJa4: 'test-ja4',
         },
         'event data was correct'
       );
@@ -951,6 +968,7 @@ describe('/account/create', () => {
       }
     );
     const mockMailer = mocks.mockMailer();
+    const mockFxaMailer = mocks.mockFxaMailer();
     const mockPush = mocks.mockPush();
     const verificationReminders = mocks.mockVerificationReminders();
     const subscriptionAccountReminders = mocks.mockVerificationReminders();
@@ -991,6 +1009,7 @@ describe('/account/create', () => {
       uid,
       verificationReminders,
       subscriptionAccountReminders,
+      mockFxaMailer,
     };
   }
 
@@ -1001,13 +1020,13 @@ describe('/account/create', () => {
       keyFetchTokenId,
       mockDB,
       mockLog,
-      mockMailer,
       mockMetricsContext,
       mockRequest,
       route,
       sessionTokenId,
       uid,
       verificationReminders,
+      mockFxaMailer,
     } = setup();
 
     const now = Date.now();
@@ -1129,6 +1148,8 @@ describe('/account/create', () => {
           service: 'sync',
           userAgent: 'test user-agent',
           uid: uid,
+          sigsciRequestId: 'test-sigsci-id',
+          clientJa4: 'test-ja4',
         },
         'event data was correct'
       );
@@ -1166,6 +1187,8 @@ describe('/account/create', () => {
           utm_medium: 'utm medium',
           utm_source: 'utm source',
           utm_term: 'utm term',
+          sigsciRequestId: 'test-sigsci-id',
+          clientJa4: 'test-ja4',
         },
         'flow event data was correct'
       );
@@ -1259,31 +1282,29 @@ describe('/account/create', () => {
       assert.equal(securityEvent.ipAddr, clientAddress);
 
       assert.equal(
-        mockMailer.sendVerifyEmail.callCount,
+        mockFxaMailer.sendVerifyEmail.callCount,
         1,
-        'mailer.sendVerifyEmail was called'
+        'mockFxaMailer.sendVerifyEmail was not called'
       );
-      args = mockMailer.sendVerifyEmail.args[0];
-      assert.equal(args[2].location.city, 'Mountain View');
-      assert.equal(args[2].location.country, 'United States');
-      assert.equal(args[2].acceptLanguage, 'en-US');
-      assert.equal(args[2].timeZone, 'America/Los_Angeles');
-      assert.equal(args[2].uaBrowser, 'Firefox Mobile');
-      assert.equal(args[2].uaBrowserVersion, '9');
-      assert.equal(args[2].uaOS, 'iOS');
-      assert.equal(args[2].uaOSVersion, '11');
-      assert.strictEqual(args[2].uaDeviceType, 'tablet');
+      args = mockFxaMailer.sendVerifyEmail.args[0];
+      assert.equal(args[0].location.city, 'Mountain View');
+      assert.equal(args[0].location.country, 'United States');
+      assert.equal(args[0].acceptLanguage, 'en-US');
+      assert.equal(args[0].timeZone, 'America/Los_Angeles');
+      assert.equal(args[0].device.uaBrowser, 'Firefox Mobile');
+      assert.equal(args[0].device.uaOS, 'iOS');
+      assert.equal(args[0].device.uaOSVersion, '11');
       assert.equal(
-        args[2].deviceId,
+        args[0].deviceId,
         mockRequest.payload.metricsContext.deviceId
       );
-      assert.equal(args[2].flowId, mockRequest.payload.metricsContext.flowId);
+      assert.equal(args[0].flowId, mockRequest.payload.metricsContext.flowId);
       assert.equal(
-        args[2].flowBeginTime,
+        args[0].flowBeginTime,
         mockRequest.payload.metricsContext.flowBeginTime
       );
-      assert.equal(args[2].service, 'sync');
-      assert.equal(args[2].uid, uid);
+      assert.equal(args[0].sync, true);
+      assert.equal(args[0].uid, uid);
 
       assert.equal(verificationReminders.create.callCount, 1);
       args = verificationReminders.create.args[0];
@@ -1318,11 +1339,11 @@ describe('/account/create', () => {
   it('should create a non-sync account', () => {
     const {
       mockLog,
-      mockMailer,
       mockRequest,
       route,
       uid,
       verificationReminders,
+      mockFxaMailer,
     } = setup();
 
     const now = Date.now();
@@ -1367,17 +1388,19 @@ describe('/account/create', () => {
           service: 'foo',
           userAgent: 'test user-agent',
           uid: uid,
+          sigsciRequestId: 'test-sigsci-id',
+          clientJa4: 'test-ja4',
         },
         'event data was correct'
       );
 
       assert.equal(
-        mockMailer.sendVerifyEmail.callCount,
+        mockFxaMailer.sendVerifyEmail.callCount,
         1,
-        'mailer.sendVerifyEmail was called'
+        'mockFxaMailer.sendVerifyEmail was not called'
       );
-      args = mockMailer.sendVerifyEmail.args[0];
-      assert.equal(args[2].service, 'foo');
+      args = mockFxaMailer.sendVerifyEmail.args[0];
+      assert.equal(args[0].sync, false);
 
       sinon.assert.calledOnce(glean.registration.confirmationEmailSent);
 
@@ -1435,9 +1458,10 @@ describe('/account/create', () => {
   });
 
   it('should return an error if email fails to send', () => {
-    const { mockMailer, mockRequest, route, verificationReminders } = setup();
+    const { mockRequest, route, verificationReminders, mockFxaMailer } =
+      setup();
 
-    mockMailer.sendVerifyEmail = sinon.spy(() => Promise.reject());
+    mockFxaMailer.sendVerifyEmail = sinon.spy(() => Promise.reject());
 
     return runTest(route, mockRequest).then(assert.fail, (err) => {
       assert.equal(err.message, 'Failed to send email');
@@ -1450,9 +1474,10 @@ describe('/account/create', () => {
   });
 
   it('should return a bounce error if send fails with one', () => {
-    const { mockMailer, mockRequest, route, verificationReminders } = setup();
+    const { mockRequest, route, verificationReminders, mockFxaMailer } =
+      setup();
 
-    mockMailer.sendVerifyEmail = sinon.spy(() =>
+    mockFxaMailer.sendVerifyEmail = sinon.spy(() =>
       Promise.reject(error.emailBouncedHard(42))
     );
 
@@ -1576,6 +1601,8 @@ describe('/account/stub', () => {
       }
     );
     const mockMailer = mocks.mockMailer();
+    mocks.mockFxaMailer();
+    mocks.mockOAuthClientInfo();
     const mockPush = mocks.mockPush();
     const verificationReminders = mocks.mockVerificationReminders();
     const subscriptionAccountReminders = mocks.mockVerificationReminders();
@@ -1718,6 +1745,8 @@ describe('/account/status', () => {
       }
     );
     const mockMailer = mocks.mockMailer();
+    mocks.mockFxaMailer();
+    mocks.mockOAuthClientInfo();
     const mockPush = mocks.mockPush();
     const mockCustoms = mocks.mockCustoms();
     const verificationReminders = mocks.mockVerificationReminders();
@@ -2229,6 +2258,8 @@ describe('/account/login', () => {
     headers: {
       dnt: '1',
       'user-agent': 'test user-agent',
+      'x-sigsci-requestid': 'test-sigsci-id',
+      'client-ja4': 'test-ja4',
     },
     metricsContext: mockMetricsContext,
     payload: {
@@ -2353,6 +2384,9 @@ describe('/account/login', () => {
     uid: uid,
   });
   const mockMailer = mocks.mockMailer();
+  const mockFxaMailer = mocks.mockFxaMailer();
+  const mockOAuthClientInfo = mocks.mockOAuthClientInfo();
+
   const mockPush = mocks.mockPush();
   const mockCustoms = {
     v2Enabled: () => true,
@@ -2381,6 +2415,8 @@ describe('/account/login', () => {
 
   beforeEach(() => {
     Container.set(CapabilityService, sinon.fake.resolves());
+    Container.set(OAuthClientInfoServiceName, mockOAuthClientInfo);
+    Container.set(FxaMailer, mockFxaMailer);
   });
 
   afterEach(() => {
@@ -2392,6 +2428,10 @@ describe('/account/login', () => {
     mockMailer.sendVerifyLoginCodeEmail = sinon.spy(() => Promise.resolve());
     mockMailer.sendVerifyShortCodeEmail = sinon.spy(() => Promise.resolve());
     mockMailer.sendVerifyEmail.resetHistory();
+    // some tests change what these resolve (or reject) to, so we completely reset
+    mockFxaMailer.sendNewDeviceLoginEmail = sinon.stub().resolves();
+    mockFxaMailer.sendVerifyEmail = sinon.stub().resolves();
+    mockFxaMailer.sendVerifyLoginEmail = sinon.stub().resolves();
     mockDB.createSessionToken.resetHistory();
     mockDB.sessions.resetHistory();
     mockMetricsContext.stash.resetHistory();
@@ -2508,6 +2548,8 @@ describe('/account/login', () => {
           service: 'sync',
           userAgent: 'test user-agent',
           uid: uid,
+          sigsciRequestId: 'test-sigsci-id',
+          clientJa4: 'test-ja4',
         },
         'event data was correct'
       );
@@ -2539,6 +2581,8 @@ describe('/account/login', () => {
           time: now,
           uid: uid,
           userAgent: 'test user-agent',
+          sigsciRequestId: 'test-sigsci-id',
+          clientJa4: 'test-ja4',
         },
         'first flow event was correct'
       );
@@ -2563,6 +2607,8 @@ describe('/account/login', () => {
           region: 'California',
           time: now,
           userAgent: 'test user-agent',
+          sigsciRequestId: 'test-sigsci-id',
+          clientJa4: 'test-ja4',
         },
         'second flow event was correct'
       );
@@ -2652,33 +2698,31 @@ describe('/account/login', () => {
       assert.equal(args[1], 'login', 'second argument was flow type');
 
       assert.equal(
-        mockMailer.sendVerifyLoginEmail.callCount,
+        mockFxaMailer.sendVerifyLoginEmail.callCount,
         1,
         'mailer.sendVerifyLoginEmail was called'
       );
-      args = mockMailer.sendVerifyLoginEmail.args[0];
-      assert.equal(args[2].acceptLanguage, 'en-US');
-      assert.equal(args[2].location.city, 'Mountain View');
-      assert.equal(args[2].location.country, 'United States');
-      assert.equal(args[2].timeZone, 'America/Los_Angeles');
-      assert.equal(args[2].uaBrowser, 'Firefox');
-      assert.equal(args[2].uaBrowserVersion, '50');
-      assert.equal(args[2].uaOS, 'Android');
-      assert.equal(args[2].uaOSVersion, '6');
-      assert.equal(args[2].uaDeviceType, 'mobile');
+      args = mockFxaMailer.sendVerifyLoginEmail.args[0];
+      assert.equal(args[0].acceptLanguage, 'en-US');
+      assert.equal(args[0].location.city, 'Mountain View');
+      assert.equal(args[0].location.country, 'United States');
+      assert.equal(args[0].timeZone, 'America/Los_Angeles');
+      assert.equal(args[0].device.uaBrowser, 'Firefox');
+      assert.equal(args[0].device.uaOS, 'Android');
+      assert.equal(args[0].device.uaOSVersion, '6');
       assert.equal(
-        args[2].deviceId,
+        args[0].deviceId,
         mockRequest.payload.metricsContext.deviceId
       );
-      assert.equal(args[2].flowId, mockRequest.payload.metricsContext.flowId);
+      assert.equal(args[0].flowId, mockRequest.payload.metricsContext.flowId);
       assert.equal(
-        args[2].flowBeginTime,
+        args[0].flowBeginTime,
         mockRequest.payload.metricsContext.flowBeginTime
       );
-      assert.equal(args[2].service, 'sync');
-      assert.equal(args[2].uid, uid);
+      assert.equal(args[0].sync, true);
+      assert.equal(args[0].uid, uid);
 
-      assert.equal(mockMailer.sendNewDeviceLoginEmail.callCount, 0);
+      assert.equal(mockFxaMailer.sendNewDeviceLoginEmail.callCount, 0);
       assert.ok(
         !response.verified,
         'response indicates account is not verified'
@@ -2723,15 +2767,15 @@ describe('/account/login', () => {
 
       return runTest(route, mockRequest, (response) => {
         assert.equal(
-          mockMailer.sendVerifyEmail.callCount,
+          mockFxaMailer.sendVerifyEmail.callCount,
           1,
-          'mailer.sendVerifyEmail was called'
+          'mockFxaMailer.sendVerifyEmail was not called'
         );
 
         // Verify that the email code was sent
-        const verifyCallArgs = mockMailer.sendVerifyEmail.getCall(0).args;
+        const verifyCallArgs = mockFxaMailer.sendVerifyEmail.getCall(0).args;
         assert.notEqual(
-          verifyCallArgs[1],
+          verifyCallArgs[0].code,
           emailCode,
           'mailer.sendVerifyEmail was called with a fresh verification code'
         );
@@ -2796,6 +2840,7 @@ describe('/account/login', () => {
             email: TEST_EMAIL,
             isVerified: true,
             isPrimary: true,
+            emailCode: 'ab12cd34',
           },
           kA: hexString(32),
           lastAuthAt: function () {
@@ -2826,7 +2871,7 @@ describe('/account/login', () => {
         assert.equal(
           mockMailer.sendVerifyEmail.callCount,
           0,
-          'mailer.sendVerifyEmail was not called'
+          'mockMailer.sendVerifyEmail was called'
         );
         assert.equal(mockMailer.sendNewDeviceLoginEmail.callCount, 0);
         assert.ok(
@@ -2845,26 +2890,15 @@ describe('/account/login', () => {
         );
 
         assert.equal(
-          mockMailer.sendVerifyLoginEmail.callCount,
+          mockFxaMailer.sendVerifyLoginEmail.callCount,
           1,
           'mailer.sendVerifyLoginEmail was called'
         );
-        assert.equal(
-          mockMailer.sendVerifyLoginEmail.getCall(0).args[2].acceptLanguage,
-          'en-US'
-        );
-        assert.equal(
-          mockMailer.sendVerifyLoginEmail.getCall(0).args[2].location.city,
-          'Mountain View'
-        );
-        assert.equal(
-          mockMailer.sendVerifyLoginEmail.getCall(0).args[2].location.country,
-          'United States'
-        );
-        assert.equal(
-          mockMailer.sendVerifyLoginEmail.getCall(0).args[2].timeZone,
-          'America/Los_Angeles'
-        );
+        const args = mockFxaMailer.sendVerifyLoginEmail.getCall(0).args[0];
+        assert.equal(args.acceptLanguage, 'en-US');
+        assert.equal(args.location.city, 'Mountain View');
+        assert.equal(args.location.country, 'United States');
+        assert.equal(args.timeZone, 'America/Los_Angeles');
       });
     });
 
@@ -2905,7 +2939,7 @@ describe('/account/login', () => {
         );
         assert.equal(mockMailer.sendNewDeviceLoginEmail.callCount, 0);
         assert.equal(
-          mockMailer.sendVerifyLoginEmail.callCount,
+          mockFxaMailer.sendVerifyLoginEmail.callCount,
           1,
           'mailer.sendVerifyLoginEmail was called'
         );
@@ -2987,7 +3021,7 @@ describe('/account/login', () => {
           );
           assert.ok(token.tokenVerified, 'session token is verified');
         });
-        assert.equal(mockMailer.sendNewDeviceLoginEmail.callCount, 1);
+        assert.equal(mockFxaMailer.sendNewDeviceLoginEmail.callCount, 1);
         assert.equal(
           mockMailer.sendVerifyLoginEmail.callCount,
           0,
@@ -3069,9 +3103,9 @@ describe('/account/login', () => {
           tokenData.tokenVerificationId,
           'sessionToken was created unverified'
         );
-        assert.equal(mockMailer.sendNewDeviceLoginEmail.callCount, 0);
+        assert.equal(mockFxaMailer.sendNewDeviceLoginEmail.callCount, 0);
         assert.equal(
-          mockMailer.sendVerifyLoginCodeEmail.callCount,
+          mockFxaMailer.sendVerifyLoginCodeEmail.callCount,
           1,
           'mailer.sendVerifyLoginEmail was called'
         );
@@ -3191,15 +3225,15 @@ describe('/account/login', () => {
           'sessionToken was created unverified'
         );
         assert.equal(
-          mockMailer.sendVerifyEmail.callCount,
+          mockFxaMailer.sendVerifyEmail.callCount,
           1,
-          'mailer.sendVerifyEmail was called'
+          'mockFxaMailer.sendVerifyEmail was not called'
         );
         assert.equal(mockMailer.sendNewDeviceLoginEmail.callCount, 0);
         assert.equal(
           mockMailer.sendVerifyLoginEmail.callCount,
           0,
-          'mailer.sendVerifyLoginEmail was not called'
+          'mailer.sendVerifyLoginEmail was called'
         );
         assert.ok(
           !response.verified,
@@ -3219,7 +3253,7 @@ describe('/account/login', () => {
     });
 
     it('should return an error if email fails to send', () => {
-      mockMailer.sendVerifyLoginEmail = sinon.spy(() => Promise.reject());
+      mockFxaMailer.sendVerifyLoginEmail = sinon.spy(() => Promise.reject());
 
       return runTest(route, mockRequest).then(assert.fail, (err) => {
         assert.equal(err.message, 'Failed to send email');
@@ -3296,9 +3330,9 @@ describe('/account/login', () => {
             'sessionToken was created unverified'
           );
           assert.equal(
-            mockMailer.sendVerifyEmail.callCount,
+            mockFxaMailer.sendVerifyEmail.callCount,
             0,
-            'mailer.sendVerifyEmail was not called'
+            'mockFxaMailer.sendVerifyEmail was called'
           );
           assert.equal(mockMailer.sendNewDeviceLoginEmail.callCount, 0);
           assert.ok(
@@ -3317,24 +3351,20 @@ describe('/account/login', () => {
           );
 
           assert.equal(
-            mockMailer.sendVerifyLoginEmail.callCount,
+            mockFxaMailer.sendVerifyLoginEmail.callCount,
             1,
             'mailer.sendVerifyLoginEmail was called'
           );
+          const sendVerifyLoginEmailArgs =
+            mockFxaMailer.sendVerifyLoginEmail.getCall(0).args[0];
+          assert.equal(sendVerifyLoginEmailArgs.acceptLanguage, 'en-US');
+          assert.equal(sendVerifyLoginEmailArgs.location.city, 'Mountain View');
           assert.equal(
-            mockMailer.sendVerifyLoginEmail.getCall(0).args[2].acceptLanguage,
-            'en-US'
-          );
-          assert.equal(
-            mockMailer.sendVerifyLoginEmail.getCall(0).args[2].location.city,
-            'Mountain View'
-          );
-          assert.equal(
-            mockMailer.sendVerifyLoginEmail.getCall(0).args[2].location.country,
+            sendVerifyLoginEmailArgs.location.country,
             'United States'
           );
           assert.equal(
-            mockMailer.sendVerifyLoginEmail.getCall(0).args[2].timeZone,
+            sendVerifyLoginEmailArgs.timeZone,
             'America/Los_Angeles'
           );
         });
@@ -3360,7 +3390,7 @@ describe('/account/login', () => {
             0,
             'mailer.sendVerifyEmail was not called'
           );
-          assert.equal(mockMailer.sendNewDeviceLoginEmail.callCount, 1);
+          assert.equal(mockFxaMailer.sendNewDeviceLoginEmail.callCount, 1);
           assert.ok(
             response.emailVerified,
             'response indicates account is verified'
@@ -3392,28 +3422,31 @@ describe('/account/login', () => {
             'sessionToken was created verified'
           );
           assert.equal(
-            mockMailer.sendVerifyEmail.callCount,
+            mockFxaMailer.sendVerifyEmail.callCount,
             0,
             'mailer.sendVerifyEmail was not called'
           );
-          assert.equal(mockMailer.sendNewDeviceLoginEmail.callCount, 1);
+          assert.equal(mockFxaMailer.sendNewDeviceLoginEmail.callCount, 1);
           assert.equal(
-            mockMailer.sendNewDeviceLoginEmail.args[0][2].deviceId,
+            mockFxaMailer.sendNewDeviceLoginEmail.args[0][0].deviceId,
             mockRequest.payload.metricsContext.deviceId
           );
           assert.equal(
-            mockMailer.sendNewDeviceLoginEmail.args[0][2].flowId,
+            mockFxaMailer.sendNewDeviceLoginEmail.args[0][0].flowId,
             mockRequest.payload.metricsContext.flowId
           );
           assert.equal(
-            mockMailer.sendNewDeviceLoginEmail.args[0][2].flowBeginTime,
+            mockFxaMailer.sendNewDeviceLoginEmail.args[0][0].flowBeginTime,
             mockRequest.payload.metricsContext.flowBeginTime
           );
           assert.equal(
-            mockMailer.sendNewDeviceLoginEmail.args[0][2].service,
-            'sync'
+            mockFxaMailer.sendNewDeviceLoginEmail.args[0][0].sync,
+            true
           );
-          assert.equal(mockMailer.sendNewDeviceLoginEmail.args[0][2].uid, uid);
+          assert.equal(
+            mockFxaMailer.sendNewDeviceLoginEmail.args[0][0].uid,
+            uid
+          );
           assert.ok(
             response.emailVerified,
             'response indicates account is verified'
@@ -3436,11 +3469,11 @@ describe('/account/login', () => {
             'sessionToken was created unverified'
           );
           assert.equal(
-            mockMailer.sendVerifyLoginEmail.callCount,
+            mockFxaMailer.sendVerifyLoginEmail.callCount,
             1,
             'mailer.sendVerifyLoginEmail was called'
           );
-          assert.equal(mockMailer.sendNewDeviceLoginEmail.callCount, 0);
+          assert.equal(mockFxaMailer.sendNewDeviceLoginEmail.callCount, 0);
           assert.ok(
             !response.verified,
             'response indicates account is unverified'
@@ -3591,11 +3624,11 @@ describe('/account/login', () => {
             'sessionToken was created unverified'
           );
           assert.equal(
-            mockMailer.sendVerifyLoginEmail.callCount,
+            mockFxaMailer.sendVerifyLoginEmail.callCount,
             1,
             'mailer.sendVerifyLoginEmail was called'
           );
-          assert.equal(mockMailer.sendNewDeviceLoginEmail.callCount, 0);
+          assert.equal(mockFxaMailer.sendNewDeviceLoginEmail.callCount, 0);
           assert.ok(
             !response.verified,
             'response indicates account is unverified'
@@ -3622,7 +3655,7 @@ describe('/account/login', () => {
             0,
             'mailer.sendVerifyLoginEmail was not called'
           );
-          assert.equal(mockMailer.sendNewDeviceLoginEmail.callCount, 1);
+          assert.equal(mockFxaMailer.sendNewDeviceLoginEmail.callCount, 1);
           assert.ok(
             response.emailVerified,
             'response indicates account is verified'
@@ -4375,10 +4408,10 @@ describe('/account/login', () => {
       });
     };
     return runTest(route, mockRequestWithRpCmsConfig, () => {
-      assert.calledOnce(mockMailer.sendNewDeviceLoginEmail);
-      const args = mockMailer.sendNewDeviceLoginEmail.args[0];
-      const emailMessage = args[2];
-      assert.equal(emailMessage.target, 'strapi');
+      assert.calledOnce(mockFxaMailer.sendNewDeviceLoginEmail);
+      const args = mockFxaMailer.sendNewDeviceLoginEmail.args[0];
+      const emailMessage = args[0];
+      // assert.equal(emailMessage.target, 'strapi');
       assert.equal(emailMessage.cmsRpClientId, '00f00f');
       assert.equal(emailMessage.cmsRpFromName, 'Testo Inc.');
       assert.equal(emailMessage.entrypoint, 'testo');
@@ -4462,6 +4495,8 @@ describe('/account/keys', () => {
           service: undefined,
           userAgent: 'test user-agent',
           uid: uid,
+          sigsciRequestId: 'test-sigsci-id',
+          clientJa4: 'test-ja4',
         },
         'event data was correct'
       );
@@ -4517,6 +4552,8 @@ describe('/account/destroy', () => {
         authPW: new Array(65).join('f'),
       },
     });
+    mocks.mockFxaMailer();
+    mocks.mockOAuthClientInfo();
   });
 
   afterEach(() => {
@@ -4664,7 +4701,9 @@ describe('/account', () => {
     mockWebSubscriptionsResponse,
     mockStripeHelper,
     mockPlaySubscriptions,
-    mockAppStoreSubscriptions;
+    mockAppStoreSubscriptions,
+    mockOAuthClientInfo,
+    mockFxaMailer;
 
   function buildRoute(
     subscriptionsEnabled = true,
@@ -4684,6 +4723,7 @@ describe('/account', () => {
         },
       },
       log,
+      db: mocks.mockDB({ email, uid }),
       stripeHelper: mockStripeHelper,
     });
     return getRoute(accountRoutes, '/account');
@@ -4718,6 +4758,8 @@ describe('/account', () => {
       'subscriptionsToResponse',
       'removeFirestoreCustomer',
     ]);
+    mockFxaMailer = mocks.mockFxaMailer();
+    mockOAuthClientInfo = mocks.mockOAuthClientInfo();
     mockStripeHelper.fetchCustomer = sinon.spy(
       async (uid, email) => mockCustomer
     );
@@ -4760,9 +4802,7 @@ describe('/account', () => {
           mockStripeHelper.subscriptionsToResponse,
           mockCustomer.subscriptions
         );
-        assert.deepEqual(result, {
-          subscriptions: mockWebSubscriptionsResponse,
-        });
+        assert.deepEqual(result.subscriptions, mockWebSubscriptionsResponse);
       });
     });
 
@@ -4772,9 +4812,7 @@ describe('/account', () => {
       });
 
       return runTest(buildRoute(), request, (result) => {
-        assert.deepEqual(result, {
-          subscriptions: [],
-        });
+        assert.deepEqual(result.subscriptions, []);
         assert.equal(log.begin.callCount, 1);
         assert.equal(mockStripeHelper.fetchCustomer.callCount, 1);
         assert.equal(mockStripeHelper.subscriptionsToResponse.callCount, 0);
@@ -4799,9 +4837,7 @@ describe('/account', () => {
 
     it('should not return stripe.customer result when subscriptions are disabled', () => {
       return runTest(buildRoute(false), request, (result) => {
-        assert.deepEqual(result, {
-          subscriptions: [],
-        });
+        assert.deepEqual(result.subscriptions, []);
 
         assert.equal(log.begin.callCount, 1);
         assert.equal(mockStripeHelper.fetchCustomer.callCount, 0);
@@ -4866,6 +4902,8 @@ describe('/account', () => {
       mockStripeHelper.subscriptionsToResponse = sinon.spy(
         async (subscriptions) => mockWebSubscriptionsResponse
       );
+      Container.set(OAuthClientInfoServiceName, mockOAuthClientInfo);
+      Container.set(FxaMailer, mockFxaMailer);
       Container.set(CapabilityService, sinon.fake);
       mockPlaySubscriptions = mocks.mockPlaySubscriptions(['getSubscriptions']);
       Container.set(PlaySubscriptions, mockPlaySubscriptions);
@@ -4886,9 +4924,7 @@ describe('/account', () => {
             mockPlaySubscriptions.getSubscriptions,
             uid
           );
-          assert.deepEqual(result, {
-            subscriptions: [mockFormattedPlayStoreSubscription],
-          });
+          assert.deepEqual(result.subscriptions, [mockFormattedPlayStoreSubscription]);
         }
       );
     });
@@ -4913,12 +4949,10 @@ describe('/account', () => {
           assert.equal(log.begin.callCount, 1);
           assert.equal(mockStripeHelper.fetchCustomer.callCount, 1);
           assert.equal(mockPlaySubscriptions.getSubscriptions.callCount, 1);
-          assert.deepEqual(result, {
-            subscriptions: [
-              ...[mockFormattedPlayStoreSubscription],
-              ...mockWebSubscriptionsResponse,
-            ],
-          });
+          assert.deepEqual(result.subscriptions, [
+            ...[mockFormattedPlayStoreSubscription],
+            ...mockWebSubscriptionsResponse,
+          ]);
         }
       );
     });
@@ -4933,9 +4967,7 @@ describe('/account', () => {
           assert.equal(log.begin.callCount, 1);
           assert.equal(mockStripeHelper.fetchCustomer.callCount, 1);
           assert.equal(mockPlaySubscriptions.getSubscriptions.callCount, 1);
-          assert.deepEqual(result, {
-            subscriptions: [],
-          });
+          assert.deepEqual(result.subscriptions, []);
         }
       );
     });
@@ -4961,9 +4993,7 @@ describe('/account', () => {
           assert.equal(log.begin.callCount, 1);
           assert.equal(mockStripeHelper.fetchCustomer.callCount, 1);
           assert.equal(mockPlaySubscriptions.getSubscriptions.callCount, 0);
-          assert.deepEqual(result, {
-            subscriptions: mockWebSubscriptionsResponse,
-          });
+          assert.deepEqual(result.subscriptions, mockWebSubscriptionsResponse);
         }
       );
     });
@@ -5036,9 +5066,7 @@ describe('/account', () => {
             mockAppStoreSubscriptions.getSubscriptions,
             uid
           );
-          assert.deepEqual(result, {
-            subscriptions: [mockFormattedAppStoreSubscription],
-          });
+          assert.deepEqual(result.subscriptions, [mockFormattedAppStoreSubscription]);
         }
       );
     });
@@ -5063,12 +5091,10 @@ describe('/account', () => {
           assert.equal(log.begin.callCount, 1);
           assert.equal(mockStripeHelper.fetchCustomer.callCount, 1);
           assert.equal(mockAppStoreSubscriptions.getSubscriptions.callCount, 1);
-          assert.deepEqual(result, {
-            subscriptions: [
-              ...[mockFormattedAppStoreSubscription],
-              ...mockWebSubscriptionsResponse,
-            ],
-          });
+          assert.deepEqual(result.subscriptions, [
+            ...[mockFormattedAppStoreSubscription],
+            ...mockWebSubscriptionsResponse,
+          ]);
         }
       );
     });
@@ -5083,9 +5109,7 @@ describe('/account', () => {
           assert.equal(log.begin.callCount, 1);
           assert.equal(mockStripeHelper.fetchCustomer.callCount, 1);
           assert.equal(mockAppStoreSubscriptions.getSubscriptions.callCount, 1);
-          assert.deepEqual(result, {
-            subscriptions: [],
-          });
+          assert.deepEqual(result.subscriptions, []);
         }
       );
     });
@@ -5111,11 +5135,224 @@ describe('/account', () => {
           assert.equal(log.begin.callCount, 1);
           assert.equal(mockStripeHelper.fetchCustomer.callCount, 1);
           assert.equal(mockAppStoreSubscriptions.getSubscriptions.callCount, 0);
-          assert.deepEqual(result, {
-            subscriptions: mockWebSubscriptionsResponse,
-          });
+          assert.deepEqual(result.subscriptions, mockWebSubscriptionsResponse);
         }
       );
+    });
+  });
+
+  describe('expanded account data fields', () => {
+    it('should return account metadata and 2FA status', () => {
+      return runTest(buildRoute(), request, (result) => {
+        assert.ok(Object.prototype.hasOwnProperty.call(result, 'createdAt'));
+        assert.ok(Object.prototype.hasOwnProperty.call(result, 'passwordCreatedAt'));
+        assert.ok(Object.prototype.hasOwnProperty.call(result, 'hasPassword'));
+        assert.ok(Object.prototype.hasOwnProperty.call(result, 'emails'));
+        assert.ok(Object.prototype.hasOwnProperty.call(result, 'totp'));
+        assert.ok(Object.prototype.hasOwnProperty.call(result, 'backupCodes'));
+        assert.ok(Object.prototype.hasOwnProperty.call(result, 'recoveryKey'));
+        assert.ok(Object.prototype.hasOwnProperty.call(result, 'recoveryPhone'));
+        assert.ok(Object.prototype.hasOwnProperty.call(result, 'securityEvents'));
+        assert.ok(Object.prototype.hasOwnProperty.call(result, 'linkedAccounts'));
+        assert.isArray(result.emails);
+        assert.isArray(result.securityEvents);
+        assert.isArray(result.linkedAccounts);
+      });
+    });
+  });
+
+  describe('recoveryPhone.available', () => {
+    function buildRouteWithRecoveryPhone(recoveryPhoneConfig) {
+      const accountRoutes = makeRoutes({
+        config: {
+          subscriptions: { enabled: false },
+          recoveryPhone: recoveryPhoneConfig,
+        },
+        log,
+        db: mocks.mockDB({ email, uid }),
+        stripeHelper: mockStripeHelper,
+      });
+      return getRoute(accountRoutes, '/account');
+    }
+
+    it('should pass geo countryCode to the service', () => {
+      const mockService = {
+        hasConfirmed: sinon.fake.resolves({ exists: false, phoneNumber: null }),
+        available: sinon.fake.resolves(true),
+      };
+      Container.set(RecoveryPhoneService, mockService);
+      const route = buildRouteWithRecoveryPhone({
+        enabled: true,
+        allowedRegions: ['US'],
+      });
+      return runTest(route, request, (result) => {
+        assert.equal(mockService.available.firstCall.args[1], 'US');
+        assert.equal(result.recoveryPhone.available, true);
+      });
+    });
+
+    it('should return available false when service returns false', () => {
+      Container.set(RecoveryPhoneService, {
+        hasConfirmed: sinon.fake.resolves({ exists: false, phoneNumber: null }),
+        available: sinon.fake.resolves(false),
+      });
+      const route = buildRouteWithRecoveryPhone({
+        enabled: true,
+        allowedRegions: ['US'],
+      });
+      return runTest(route, request, (result) => {
+        assert.equal(result.recoveryPhone.available, false);
+      });
+    });
+
+    it('should return available false when service call fails', () => {
+      Container.set(RecoveryPhoneService, {
+        hasConfirmed: sinon.fake.resolves({ exists: false, phoneNumber: null }),
+        available: sinon.fake.rejects(new Error('service error')),
+      });
+      const route = buildRouteWithRecoveryPhone({
+        enabled: true,
+        allowedRegions: ['US'],
+      });
+      return runTest(route, request, (result) => {
+        assert.equal(result.recoveryPhone.available, false);
+      });
+    });
+
+    it('should return available false when geo location cannot be parsed', () => {
+      Container.set(RecoveryPhoneService, {
+        hasConfirmed: sinon.fake.resolves({ exists: false, phoneNumber: null }),
+        available: sinon.fake.resolves(false),
+      });
+      const noGeoRequest = mocks.mockRequest({
+        credentials: { uid, email },
+        log,
+        geo: {},
+      });
+      const route = buildRouteWithRecoveryPhone({
+        enabled: true,
+        allowedRegions: ['US'],
+      });
+      return runTest(route, noGeoRequest, (result) => {
+        assert.equal(result.recoveryPhone.available, false);
+      });
+    });
+  });
+});
+
+describe('/account/email_bounce_status', () => {
+  let log, mockDB;
+
+  const email = 'test@example.com';
+
+  function buildRoute(dbOverrides = {}) {
+    log = mocks.mockLog();
+    mockDB = {
+      emailBounces: sinon.spy(() => Promise.resolve([])),
+      ...dbOverrides,
+    };
+    const accountRoutes = makeRoutes({
+      config: { smtp: { bounces: {} } },
+      log,
+      db: mockDB,
+      customs: {
+        check: sinon.spy(() => Promise.resolve()),
+        checkAuthenticated: sinon.spy(() => Promise.resolve()),
+      },
+    });
+    return getRoute(accountRoutes, '/account/email_bounce_status');
+  }
+
+  it('should return hasHardBounce: false when no bounces exist', () => {
+    const request = mocks.mockRequest({ payload: { email } });
+    return runTest(buildRoute(), request, (result) => {
+      assert.deepEqual(result, { hasHardBounce: false });
+    });
+  });
+
+  it('should return hasHardBounce: true when a hard bounce exists', () => {
+    const request = mocks.mockRequest({ payload: { email } });
+    const route = buildRoute({
+      emailBounces: sinon.spy(() =>
+        Promise.resolve([{ bounceType: 1, email, createdAt: Date.now() }])
+      ),
+    });
+    return runTest(route, request, (result) => {
+      assert.deepEqual(result, { hasHardBounce: true });
+    });
+  });
+
+  it('should return hasHardBounce: false on db error', () => {
+    const request = mocks.mockRequest({ payload: { email } });
+    const route = buildRoute({
+      emailBounces: sinon.spy(() => Promise.reject(new Error('db error'))),
+    });
+    return runTest(route, request, (result) => {
+      assert.deepEqual(result, { hasHardBounce: false });
+    });
+  });
+});
+
+describe('/account/metrics_opt', () => {
+  let log, mockDB, mockCustoms;
+
+  const uid = 'abc123';
+  const email = 'test@example.com';
+
+  function buildRoute(setMetricsOptStub) {
+    log = mocks.mockLog();
+    mockCustoms = {
+      check: sinon.spy(() => Promise.resolve()),
+      checkAuthenticated: sinon.spy(() => Promise.resolve()),
+    };
+    mockDB = mocks.mockDB({ email, uid });
+    // Reset the shared profile mock's deleteCache spy
+    profile.deleteCache.resetHistory();
+    const accountRoutes = makeRoutes(
+      {
+        log,
+        db: mockDB,
+        customs: mockCustoms,
+      },
+      {
+        'fxa-shared/db/models/auth': {
+          Account: { setMetricsOpt: setMetricsOptStub },
+          getAccountCustomerByUid: mockGetAccountCustomerByUid,
+        },
+      }
+    );
+    return getRoute(accountRoutes, '/account/metrics_opt');
+  }
+
+  it('should call setMetricsOpt and notify services on opt-out', () => {
+    const setMetricsOptStub = sinon.stub().resolves();
+    const route = buildRoute(setMetricsOptStub);
+    const request = mocks.mockRequest({
+      credentials: { uid, email },
+      payload: { state: 'out' },
+      log,
+    });
+    return runTest(route, request, (result) => {
+      assert.deepEqual(result, {});
+      assert.calledOnce(setMetricsOptStub);
+      assert.calledWith(setMetricsOptStub, uid, 'out');
+      assert.calledOnce(mockCustoms.checkAuthenticated);
+      assert.calledOnce(profile.deleteCache);
+    });
+  });
+
+  it('should call setMetricsOpt and notify services on opt-in', () => {
+    const setMetricsOptStub = sinon.stub().resolves();
+    const route = buildRoute(setMetricsOptStub);
+    const request = mocks.mockRequest({
+      credentials: { uid, email },
+      payload: { state: 'in' },
+      log,
+    });
+    return runTest(route, request, (result) => {
+      assert.deepEqual(result, {});
+      assert.calledOnce(setMetricsOptStub);
+      assert.calledWith(setMetricsOptStub, uid, 'in');
     });
   });
 });

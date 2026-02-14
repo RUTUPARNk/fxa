@@ -22,6 +22,7 @@ import {
   PriceManager,
   SubscriptionManager,
   PaymentMethodManager,
+  PaymentProvider,
   SubPlatPaymentMethodType,
 } from '@fxa/payments/customer';
 import { PaymentsEmitterService } from '@fxa/payments/events';
@@ -37,6 +38,7 @@ import {
   MockPaymentsGleanConfigProvider,
   MockPaymentsGleanFactory,
   PaymentsGleanManager,
+  PaymentsGleanService,
 } from '@fxa/payments/metrics';
 import {
   MockStrapiClientConfigProvider,
@@ -83,9 +85,6 @@ describe('SubscriptionEventsService', () => {
     error: jest.fn(),
     log: jest.fn(),
   };
-  const paymentMethodManagerMock = {
-    determineType: jest.fn(),
-  };
 
   const { event: mockEvent, eventObjectData: mockEventObjectData } =
     CustomerSubscriptionDeletedResponseFactory();
@@ -97,10 +96,7 @@ describe('SubscriptionEventsService', () => {
           provide: Logger,
           useValue: mockLogger,
         },
-        {
-          provide: PaymentMethodManager,
-          useValue: paymentMethodManagerMock,
-        },
+        PaymentMethodManager,
         MockStripeConfigProvider,
         MockStripeEventConfigProvider,
         StripeClient,
@@ -114,6 +110,7 @@ describe('SubscriptionEventsService', () => {
         PayPalClient,
         CurrencyManager,
         MockCurrencyConfigProvider,
+        PaymentsGleanService,
         PaymentsGleanManager,
         MockPaymentsGleanConfigProvider,
         MockPaymentsGleanFactory,
@@ -161,7 +158,8 @@ describe('SubscriptionEventsService', () => {
       jest
         .spyOn(emitterService, 'getEmitter')
         .mockReturnValue(mockEmitter as any);
-      (paymentMethodManager.determineType as jest.Mock).mockResolvedValue({
+      jest.spyOn(paymentMethodManager, 'determineType').mockResolvedValue({
+        provider: PaymentProvider.Stripe,
         type: SubPlatPaymentMethodType.Card,
         paymentMethodId: 'pm_id',
       });
@@ -178,17 +176,16 @@ describe('SubscriptionEventsService', () => {
         expect(mockEmitter.emit).toHaveBeenCalledWith(
           expect.any(String),
           expect.objectContaining({
-            paymentProvider: 'card',
+            paymentProvider: PaymentProvider.Stripe,
           })
         );
       });
 
       it('should emit the subscriptionEnded event, with paymentProvider external_paypal', async () => {
-        (paymentMethodManager.determineType as jest.Mock).mockResolvedValueOnce(
-          {
-            type: SubPlatPaymentMethodType.PayPal,
-          }
-        );
+        jest.spyOn(paymentMethodManager, 'determineType').mockResolvedValue({
+          provider: PaymentProvider.PayPal,
+          type: SubPlatPaymentMethodType.PayPal,
+        });
         await subscriptionEventsService.handleCustomerSubscriptionDeleted(
           mockEvent,
           mockEventObjectData
@@ -198,7 +195,7 @@ describe('SubscriptionEventsService', () => {
         expect(mockEmitter.emit).toHaveBeenCalledWith(
           expect.any(String),
           expect.objectContaining({
-            paymentProvider: 'external_paypal',
+            paymentProvider: PaymentProvider.PayPal,
           })
         );
       });
@@ -284,7 +281,7 @@ describe('SubscriptionEventsService', () => {
             mockEvent,
             mockEventObjectData
           )
-        ).rejects.toThrowError();
+        ).rejects.toThrow();
       });
     });
   });

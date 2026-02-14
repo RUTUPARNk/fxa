@@ -109,6 +109,8 @@ export const MOCK_CMS_INFO = {
       syncHidePromoAfterLogin: false,
     },
     favicon: '',
+    additionalAccessibilityInfo:
+      'Firefox will try sending you back to use an email mask after you sign in.',
     backgrounds: {
       header: 'linear-gradient(135deg, #6B4DFB 0%, #3A1A78 100%)',
       defaultLayout:
@@ -194,18 +196,18 @@ export const createMockIntegrationWithCms = () =>
 export function mockGetWebChannelServices({
   isSync = false,
   isRelay = false,
-  isAiWindow = false,
+  isSmartWindow = false,
 }: {
   isSync?: boolean;
   isRelay?: boolean;
-  isAiWindow?: boolean;
+  isSmartWindow?: boolean;
 } = {}) {
   return (syncEngines?: SyncEngines): WebChannelServices | undefined => {
     if (isRelay) {
       return { relay: {} };
     }
-    if (isAiWindow) {
-      return { aiwindow: {} };
+    if (isSmartWindow) {
+      return { smartwindow: {} };
     }
     if (isSync) {
       return { sync: syncEngines || {} };

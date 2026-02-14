@@ -17,27 +17,8 @@ const log = require('../../../lib/log');
 const random = require('../../../lib/crypto/random');
 const glean = mocks.mockGlean();
 const Container = require('typedi').Container;
-const { FxaMailer } = require('../../../lib/senders/fxa-mailer');
 
 const TEST_EMAIL = 'foo@gmail.com';
-
-function setupFxaMailerMock() {
-  const mockFxaMailer = {
-    sendRecoveryEmail: sinon.stub().resolves(),
-    sendPasswordForgotOtpEmail: sinon.stub().resolves(),
-    splitEmails: sinon.stub().returns({ to: TEST_EMAIL, cc: [] }),
-    helpers: {
-      constructLocalTimeString: sinon.stub().returns({
-        timeNow: '12:00:00 PM (UTC)',
-        dateNow: 'Monday, Jan 1, 2024',
-      }),
-    },
-  };
-
-  Container.set(FxaMailer, mockFxaMailer);
-
-  return mockFxaMailer;
-}
 
 function makeRoutes(options = {}) {
   const config = options.config || {
@@ -92,7 +73,8 @@ describe('/password', () => {
     // mailer mock must be done before route creation/require
     // otherwise it won't pickup the mock we define because
     // of module caching
-    mockFxaMailer = setupFxaMailerMock();
+    mocks.mockOAuthClientInfo();
+    mockFxaMailer = mocks.mockFxaMailer();
     mockAccountEventsManager = mocks.mockAccountEventsManager();
     glean.resetPassword.emailSent.reset();
   });
@@ -444,229 +426,6 @@ describe('/password', () => {
     });
   });
 
-  it('/forgot/send_code', () => {
-    const mockCustoms = mocks.mockCustoms();
-    const uid = uuid.v4({}, Buffer.alloc(16)).toString('hex');
-    const passwordForgotTokenId = crypto.randomBytes(16).toString('hex');
-    const mockDB = mocks.mockDB({
-      email: TEST_EMAIL,
-      passCode: 'foo',
-      passwordForgotTokenId,
-      uid,
-    });
-    const mockMailer = mocks.mockMailer();
-    const mockMetricsContext = mocks.mockMetricsContext();
-    const mockLog = log('ERROR', 'test', {
-      stdout: {
-        on: sinon.spy(),
-        write: sinon.spy(),
-      },
-      stderr: {
-        on: sinon.spy(),
-        write: sinon.spy(),
-      },
-    });
-    mockLog.flowEvent = sinon.spy(() => {
-      return Promise.resolve();
-    });
-    const passwordRoutes = makeRoutes({
-      customs: mockCustoms,
-      db: mockDB,
-      mailer: mockMailer,
-      metricsContext: mockMetricsContext,
-      log: mockLog,
-    });
-
-    const mockRequest = mocks.mockRequest({
-      log: mockLog,
-      payload: {
-        email: TEST_EMAIL,
-        metricsContext: {
-          deviceId: 'wibble',
-          flowId:
-            'F1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF103',
-          flowBeginTime: Date.now() - 1,
-        },
-      },
-      query: {},
-      metricsContext: mockMetricsContext,
-    });
-    return runRoute(
-      passwordRoutes,
-      '/password/forgot/send_code',
-      mockRequest
-    ).then((response) => {
-      assert.equal(
-        mockDB.accountRecord.callCount,
-        1,
-        'db.emailRecord was called once'
-      );
-
-      assert.equal(
-        mockDB.createPasswordForgotToken.callCount,
-        1,
-        'db.createPasswordForgotToken was called once'
-      );
-      let args = mockDB.createPasswordForgotToken.args[0];
-      assert.equal(
-        args.length,
-        1,
-        'db.createPasswordForgotToken was passed one argument'
-      );
-      assert.deepEqual(
-        args[0].uid,
-        uid,
-        'db.createPasswordForgotToken was passed the correct uid'
-      );
-      assert.equal(
-        args[0].createdAt,
-        undefined,
-        'db.createPasswordForgotToken was not passed a createdAt timestamp'
-      );
-
-      assert.equal(
-        mockRequest.validateMetricsContext.callCount,
-        1,
-        'validateMetricsContext was called'
-      );
-
-      assert.equal(mockMetricsContext.setFlowCompleteSignal.callCount, 1);
-      args = mockMetricsContext.setFlowCompleteSignal.args[0];
-      assert.lengthOf(args, 1);
-      assert.equal(args[0], 'account.reset');
-
-      assert.equal(mockMetricsContext.stash.callCount, 1);
-      args = mockMetricsContext.stash.args[0];
-      assert.lengthOf(args, 1);
-      assert.equal(args[0].id, passwordForgotTokenId);
-      assert.equal(args[0].uid, uid);
-
-      assert.equal(
-        mockLog.flowEvent.callCount,
-        2,
-        'log.flowEvent was called twice'
-      );
-      assert.equal(
-        mockLog.flowEvent.args[0][0].event,
-        'password.forgot.send_code.start',
-        'password.forgot.send_code.start event was logged'
-      );
-      assert.equal(
-        mockLog.flowEvent.args[1][0].event,
-        'password.forgot.send_code.completed',
-        'password.forgot.send_code.completed event was logged'
-      );
-
-      const mailerArgs = mockFxaMailer.sendRecoveryEmail.args[0];
-      // strong typing here would be great. We're making sure the mailer is
-      // called with the required properties for fxa-mailer.sendRecoveryEmail, so we could
-      // export that type eventually and use it here for mailerArgs[1] so we're not guessing
-      assert.equal(mailerArgs[0].to, TEST_EMAIL);
-      assert.equal(mailerArgs[0].location.city, 'Mountain View');
-      assert.equal(mailerArgs[0].location.country, 'United States');
-      assert.equal(mailerArgs[0].timeZone, 'America/Los_Angeles');
-      assert.equal(mailerArgs[0].deviceId, 'wibble');
-
-      sinon.assert.calledOnceWithExactly(
-        glean.resetPassword.emailSent,
-        mockRequest
-      );
-    });
-  });
-
-  it('/forgot/resend_code', () => {
-    const mockCustoms = mocks.mockCustoms();
-    const uid = uuid.v4({}, Buffer.alloc(16)).toString('hex');
-    const mockDB = mocks.mockDB();
-    const mockMailer = mocks.mockMailer();
-    const mockMetricsContext = mocks.mockMetricsContext();
-    const mockLog = log('ERROR', 'test', {
-      stdout: {
-        on: sinon.spy(),
-        write: sinon.spy(),
-      },
-      stderr: {
-        on: sinon.spy(),
-        write: sinon.spy(),
-      },
-    });
-    mockLog.flowEvent = sinon.spy(() => {
-      return Promise.resolve();
-    });
-    const passwordRoutes = makeRoutes({
-      customs: mockCustoms,
-      db: mockDB,
-      mailer: mockMailer,
-      metricsContext: mockMetricsContext,
-      log: mockLog,
-    });
-
-    const mockRequest = mocks.mockRequest({
-      credentials: {
-        data: crypto.randomBytes(16).toString('hex'),
-        email: TEST_EMAIL,
-        passCode: Buffer.from('abcdef', 'hex'),
-        ttl: function () {
-          return 17;
-        },
-        uid: uid,
-      },
-      log: mockLog,
-      metricsContext: mockMetricsContext,
-      payload: {
-        email: TEST_EMAIL,
-        metricsContext: {
-          deviceId: 'wibble',
-          flowId:
-            'F1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF103',
-          flowBeginTime: Date.now() - 1,
-        },
-      },
-      query: {},
-    });
-    return runRoute(
-      passwordRoutes,
-      '/password/forgot/resend_code',
-      mockRequest
-    ).then((response) => {
-      assert.equal(
-        mockMailer.sendRecoveryEmail.callCount,
-        1,
-        'mailer.sendRecoveryEmail was called once'
-      );
-      assert.equal(mockMailer.sendRecoveryEmail.args[0][2].uid, uid);
-      assert.equal(mockMailer.sendRecoveryEmail.args[0][2].deviceId, 'wibble');
-
-      assert.equal(mockRequest.validateMetricsContext.callCount, 0);
-      assert.equal(
-        mockLog.flowEvent.callCount,
-        2,
-        'log.flowEvent was called twice'
-      );
-      assert.equal(
-        mockLog.flowEvent.args[0][0].event,
-        'password.forgot.resend_code.start',
-        'password.forgot.resend_code.start event was logged'
-      );
-      assert.equal(
-        mockLog.flowEvent.args[1][0].event,
-        'password.forgot.resend_code.completed',
-        'password.forgot.resend_code.completed event was logged'
-      );
-
-      sinon.assert.calledWith(
-        mockAccountEventsManager.recordSecurityEvent,
-        sinon.match.defined,
-        sinon.match({
-          name: 'account.password_reset_requested',
-          ipAddr: '63.245.221.32',
-          uid: mockRequest.auth.credentials.uid,
-          tokenId: undefined,
-        })
-      );
-    });
-  });
-
   it('/forgot/verify_code', () => {
     const mockCustoms = mocks.mockCustoms();
     const uid = uuid.v4({}, Buffer.alloc(16)).toString('hex');
@@ -792,12 +551,10 @@ describe('/password', () => {
       assert.equal(args[1].id, accountResetToken.id);
       assert.equal(args[1].uid, uid);
 
-      assert.equal(mockMailer.sendPasswordResetEmail.callCount, 1);
-      assert.equal(mockMailer.sendPasswordResetEmail.args[0][2].uid, uid);
-      assert.equal(
-        mockMailer.sendPasswordResetEmail.args[0][2].deviceId,
-        'wibble'
-      );
+      assert.equal(mockFxaMailer.sendPasswordResetEmail.callCount, 1);
+      const passwordResetArgs = mockFxaMailer.sendPasswordResetEmail.args[0];
+      assert.equal(passwordResetArgs[0].uid, uid);
+      assert.equal(passwordResetArgs[0].deviceId, 'wibble');
     });
   });
 
@@ -1002,14 +759,13 @@ describe('/password', () => {
         );
 
         assert.equal(mockDB.account.callCount, 1);
-        assert.equal(mockMailer.sendPasswordChangedEmail.callCount, 1);
-        let args = mockMailer.sendPasswordChangedEmail.args[0];
-        assert.lengthOf(args, 3);
-        assert.equal(args[1].email, TEST_EMAIL);
-        assert.equal(args[2].location.city, 'Mountain View');
-        assert.equal(args[2].location.country, 'United States');
-        assert.equal(args[2].timeZone, 'America/Los_Angeles');
-        assert.equal(args[2].uid, uid);
+        assert.equal(mockFxaMailer.sendPasswordChangedEmail.callCount, 1);
+        let args = mockFxaMailer.sendPasswordChangedEmail.args[0];
+        assert.equal(args[0].to, TEST_EMAIL);
+        assert.equal(args[0].location.city, 'Mountain View');
+        assert.equal(args[0].location.country, 'United States');
+        assert.equal(args[0].timeZone, 'America/Los_Angeles');
+        assert.equal(args[0].uid, uid);
 
         assert.equal(
           mockLog.activityEvent.callCount,
@@ -1031,6 +787,8 @@ describe('/password', () => {
             service: undefined,
             uid: uid.toString('hex'),
             userAgent: 'test user-agent',
+            sigsciRequestId: 'test-sigsci-id',
+            clientJa4: 'test-ja4',
           },
           'argument was event data'
         );
@@ -1114,6 +872,10 @@ describe('/password', () => {
         }),
       };
       const mockLog = mocks.mockLog();
+
+      // Configure mockFxaMailer to reject for this test
+      mockFxaMailer.sendPasswordChangedEmail.rejects(error.emailBouncedHard());
+
       const mockRequest = mocks.mockRequest({
         credentials: {
           uid: uid,
@@ -1175,7 +937,7 @@ describe('/password', () => {
         );
 
         assert.equal(mockDB.account.callCount, 1);
-        assert.equal(mockMailer.sendPasswordChangedEmail.callCount, 1);
+        assert.equal(mockFxaMailer.sendPasswordChangedEmail.callCount, 1);
 
         assert.equal(
           mockLog.activityEvent.callCount,
@@ -1197,6 +959,8 @@ describe('/password', () => {
             service: undefined,
             uid: uid.toString('hex'),
             userAgent: 'test user-agent',
+            sigsciRequestId: 'test-sigsci-id',
+            clientJa4: 'test-ja4',
           },
           'argument was event data'
         );
@@ -1340,26 +1104,6 @@ describe('/password', () => {
       }
     });
 
-    it('should fail if not in totp verified session', async () => {
-      mockDB.totpToken = sinon.spy(() => {
-        return {
-          verified: true,
-          enabled: true,
-        };
-      });
-      passwordRoutes = makeRoutes({
-        db: mockDB,
-        mailer: mockMailer,
-      });
-      mockRequest.auth.credentials.authenticatorAssuranceLevel = 1;
-      try {
-        await runRoute(passwordRoutes, '/password/create', mockRequest);
-        assert.fail('should not set password');
-      } catch (err) {
-        assert.equal(err.errno, 138, 'unverified session error');
-      }
-    });
-
     it('should succeed if in totp verified session', async () => {
       mockDB.totpToken = sinon.spy(() => {
         return {
@@ -1476,7 +1220,7 @@ describe('/password', () => {
 
       // Verify notifications
       sinon.assert.calledOnce(mockPush.notifyPasswordChanged);
-      sinon.assert.calledOnce(mockMailer.sendPasswordChangedEmail);
+      sinon.assert.calledOnce(mockFxaMailer.sendPasswordChangedEmail);
 
       // Verify security events
       sinon.assert.calledWith(

@@ -7,8 +7,7 @@ import * as IndexModule from './index';
 import * as ReactUtils from 'fxa-react/lib/utils';
 import * as cache from '../../lib/cache';
 
-import React from 'react';
-import { waitFor } from '@testing-library/react';
+import { act, waitFor } from '@testing-library/react';
 import { LocationProvider } from '@reach/router';
 import { useValidatedQueryParams } from '../../lib/hooks/useValidate';
 import { Integration, IntegrationType, WebIntegration } from '../../models';
@@ -142,7 +141,7 @@ describe('IndexContainer', () => {
       getClientId: () => 'abc123',
       isSync: () => true,
       isFirefoxClientServiceRelay: () => false,
-      isFirefoxClientServiceAiWindow: () => false,
+      isFirefoxClientServiceSmartWindow: () => false,
       wantsKeys: () => true,
       getCmsInfo: () => undefined,
       data: { clientId: 'abc123' },
@@ -205,7 +204,7 @@ describe('IndexContainer', () => {
     jest.resetAllMocks();
   });
 
-  it('should check query parameters', () => {
+  it('should check query parameters', async () => {
     const { container } = renderWithLocalizationProvider(
       <LocationProvider>
         <IndexContainer
@@ -218,10 +217,12 @@ describe('IndexContainer', () => {
       </LocationProvider>
     );
     expect(container).toBeDefined();
-    expect(mockUseValidatedQueryParams).toHaveBeenCalledWith(
-      IndexQueryParams,
-      false
-    );
+    await waitFor(() => {
+      expect(mockUseValidatedQueryParams).toHaveBeenCalledWith(
+        IndexQueryParams,
+        false
+      );
+    });
   });
 
   it('should render the Index component when no redirection is required', async () => {
@@ -896,7 +897,9 @@ describe('IndexContainer', () => {
           expect(currentIndexProps?.processEmailSubmission).toBeDefined();
         });
 
-        await currentIndexProps?.processEmailSubmission(MOCK_EMAIL);
+        await act(async () => {
+          await currentIndexProps?.processEmailSubmission(MOCK_EMAIL);
+        });
 
         await waitFor(() => {
           expect(firefox.fxaCanLinkAccount).toHaveBeenCalledTimes(1);
@@ -929,7 +932,9 @@ describe('IndexContainer', () => {
         await waitFor(() => {
           expect(currentIndexProps?.processEmailSubmission).toBeDefined();
         });
-        await currentIndexProps?.processEmailSubmission(MOCK_EMAIL);
+        await act(async () => {
+          await currentIndexProps?.processEmailSubmission(MOCK_EMAIL);
+        });
 
         await waitFor(() => {
           expect(firefox.fxaCanLinkAccount).toHaveBeenCalledTimes(1);
@@ -962,13 +967,84 @@ describe('IndexContainer', () => {
           expect(currentIndexProps?.processEmailSubmission).toBeDefined();
         });
 
-        await currentIndexProps?.processEmailSubmission(MOCK_EMAIL);
+        await act(async () => {
+          await currentIndexProps?.processEmailSubmission(MOCK_EMAIL);
+        });
 
         await waitFor(() => {
           expect(firefox.fxaCanLinkAccount).toHaveBeenCalled();
         });
         await waitFor(() => {
           expect(currentIndexProps?.errorBannerMessage).toBeDefined();
+        });
+      });
+
+      describe('useFxAStatusResult.supportsCanLinkAccountUid and processEmailSubmission', () => {
+        beforeEach(() => {
+          jest.spyOn(cache, 'currentAccount').mockReturnValue({
+            uid: 'abc123',
+            email: MOCK_EMAIL,
+            lastLogin: Date.now(),
+          });
+        });
+
+        it('shows loading spinner and does not call fxaCanLinkAccount when supportsCanLinkAccountUid is undefined', async () => {
+          mockUseFxAStatusResult = mockUseFxAStatus({
+            supportsCanLinkAccountUid: undefined,
+          });
+
+          const { getByText } = renderWithLocalizationProvider(
+            <LocationProvider>
+              <IndexContainer
+                integration={integration}
+                serviceName={MozServices.FirefoxSync}
+                useFxAStatusResult={mockUseFxAStatusResult}
+              />
+            </LocationProvider>
+          );
+
+          expect(getByText('LoadingSpinner')).toBeInTheDocument();
+          expect(firefox.fxaCanLinkAccount).not.toHaveBeenCalled();
+        });
+
+        it('does not call fxaCanLinkAccount when supportsCanLinkAccountUid is true', async () => {
+          mockUseFxAStatusResult = mockUseFxAStatus({
+            supportsCanLinkAccountUid: true,
+          });
+
+          renderWithLocalizationProvider(
+            <LocationProvider>
+              <IndexContainer
+                integration={integration}
+                serviceName={MozServices.FirefoxSync}
+                useFxAStatusResult={mockUseFxAStatusResult}
+              />
+            </LocationProvider>
+          );
+
+          await waitFor(() => {
+            expect(firefox.fxaCanLinkAccount).not.toHaveBeenCalled();
+          });
+        });
+
+        it('calls fxaCanLinkAccount when supportsCanLinkAccountUid is false', async () => {
+          mockUseFxAStatusResult = mockUseFxAStatus({
+            supportsCanLinkAccountUid: false,
+          });
+
+          renderWithLocalizationProvider(
+            <LocationProvider>
+              <IndexContainer
+                integration={integration}
+                serviceName={MozServices.FirefoxSync}
+                useFxAStatusResult={mockUseFxAStatusResult}
+              />
+            </LocationProvider>
+          );
+
+          await waitFor(() => {
+            expect(firefox.fxaCanLinkAccount).toHaveBeenCalled();
+          });
         });
       });
     });

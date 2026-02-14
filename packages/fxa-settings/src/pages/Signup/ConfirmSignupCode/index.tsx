@@ -16,7 +16,10 @@ import {
   useSession,
 } from '../../../models/hooks';
 import AppLayout from '../../../components/AppLayout';
-import CardHeader from '../../../components/CardHeader';
+import CardHeader, {
+  getCmsHeadlineClassName,
+  getCmsHeadlineStyle,
+} from '../../../components/CardHeader';
 import FormVerifyCode, {
   FormAttributes,
 } from '../../../components/FormVerifyCode';
@@ -75,7 +78,6 @@ const ConfirmSignupCode = ({
 
   const navigateWithQuery = useNavigateWithQuery();
   const webRedirectCheck = useWebRedirect(integration.data.redirectTo);
-  const isFirefoxClientServiceRelay = integration.isFirefoxClientServiceRelay();
   const isSync = integration.isSync();
   const submitFormOnPaste = !isSync;
 
@@ -195,6 +197,7 @@ const ConfirmSignupCode = ({
         uid,
         // Update verification status of stored current account
         verified: true,
+        sessionVerified: true,
       });
 
       if (hasSelectedNewsletters) {
@@ -330,6 +333,8 @@ const ConfirmSignupCode = ({
   }
 
   const cmsInfo = integration.getCmsInfo();
+  const additionalAccessibilityInfo =
+    cmsInfo?.shared.additionalAccessibilityInfo;
 
   const title = cmsInfo?.SignupConfirmCodePage?.pageTitle
     ? cmsInfo?.SignupConfirmCodePage?.pageTitle
@@ -351,7 +356,10 @@ const ConfirmSignupCode = ({
               className="justify-start mb-4 max-h-[40px]"
             />
           )}
-          <h1 className="card-header">
+          <h1
+            className={getCmsHeadlineClassName(cmsInfo.shared.headlineFontSize)}
+            style={getCmsHeadlineStyle(cmsInfo.shared.headlineTextColor)}
+          >
             {cmsInfo.SignupConfirmCodePage.headline}
           </h1>
           <p className="mt-1 text-sm">
@@ -387,13 +395,8 @@ const ConfirmSignupCode = ({
         </p>
       </FtlMsg>
 
-      {isFirefoxClientServiceRelay && (
-        <FtlMsg id="confirm-signup-code-desktop-relay">
-          <p className="mt-2 text-sm">
-            Firefox will try sending you back to use an email mask after you
-            sign in.
-          </p>
-        </FtlMsg>
+      {additionalAccessibilityInfo && (
+        <p className="mt-2 text-sm">{additionalAccessibilityInfo}</p>
       )}
 
       <FormVerifyCode

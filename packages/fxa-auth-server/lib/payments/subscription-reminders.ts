@@ -39,12 +39,18 @@ interface EndingRemindersOptions {
   yearlyReminderDays: number;
 }
 
+interface RenewalRemindersOptions {
+  monthlyReminderDays?: number;
+  yearlyReminderDays?: number;
+}
+
 export class SubscriptionReminders {
   private db: any;
   private mailer: any;
   private statsd: StatsD;
   private planDuration: Duration;
   private reminderDuration: Duration;
+  private yearlyRenewalReminderDuration: Duration | undefined;
   private endingReminderEnabled: boolean;
   private dailyEndingReminderDuration: Duration | undefined;
   private monthlyEndingReminderDuration: Duration;
@@ -61,6 +67,7 @@ export class SubscriptionReminders {
     planLength: number,
     reminderLength: number,
     endingReminderOptions: EndingRemindersOptions,
+    renewalRemindersOptions: RenewalRemindersOptions,
     db: any,
     mailer: any,
     statsd: StatsD,
@@ -75,6 +82,16 @@ export class SubscriptionReminders {
     this.statsd = statsd;
     this.planDuration = Duration.fromObject({ days: planLength });
     this.reminderDuration = Duration.fromObject({ days: reminderLength });
+    if (renewalRemindersOptions.monthlyReminderDays) {
+      this.reminderDuration = Duration.fromObject({
+        days: renewalRemindersOptions.monthlyReminderDays,
+      });
+    }
+    if (renewalRemindersOptions.yearlyReminderDays) {
+      this.yearlyRenewalReminderDuration = Duration.fromObject({
+        days: renewalRemindersOptions.yearlyReminderDays,
+      });
+    }
     this.endingReminderEnabled = endingReminderOptions.enabled;
     if (endingReminderOptions.dailyReminderDays) {
       this.dailyEndingReminderDuration = Duration.fromObject({
@@ -214,6 +231,9 @@ export class SubscriptionReminders {
         {
           uid,
           email,
+          icon:
+            purchase.offering.commonContent.localizations.at(0)?.emailIcon ||
+            purchase.offering.commonContent.emailIcon,
           acceptLanguage: account.locale,
           subscription: formattedSubscription,
           reminderLength: this.reminderDuration.as('days'),
@@ -225,14 +245,13 @@ export class SubscriptionReminders {
           subscriptionSupportUrl:
             purchase.offering.commonContent.localizations.at(0)?.supportUrl ||
             purchase.offering.commonContent.supportUrl,
-          productIconURLNew:
-            purchase.purchaseDetails.localizations.at(0)?.webIcon ||
-            purchase.purchaseDetails.webIcon,
           churnTermsUrl: new URL(
-            `${this.paymentsNextUrl}/${offeringId}/${priceSubplatInterval}/stay-subscribed/loyalty-discount/terms`
+            `${this.paymentsNextUrl}/${offeringId}/${priceSubplatInterval}/stay_subscribed/loyalty-discount/terms`
           ).toString(),
           ctaButtonLabel: cmsChurnInterventionEntry?.ctaMessage,
-          ctaButtonUrl: cmsChurnInterventionEntry?.productPageUrl,
+          ctaButtonUrl: new URL(
+            `${this.paymentsNextUrl}/subscriptions/${subscription.id}/loyalty-discount/stay-subscribed`
+          ).toString(),
           showChurn: isEligible,
         }
       );
@@ -253,11 +272,34 @@ export class SubscriptionReminders {
   }
 
   /**
+   * Determine if a discount is ending by checking that a discount currently exists
+   * but will not be present on the upcoming invoice does not.
+   */
+  private hasDiscountEnding(
+    currentDiscountId: string | null,
+    upcomingDiscountId: string | null,
+  ): boolean {
+    return !!currentDiscountId && !upcomingDiscountId;
+  }
+
+  /**
+   * Determine if the upcoming invoice has a discount that is different from
+   * the current discount.
+   */
+  private hasDifferentDiscount(
+    currentDiscountId: string | null,
+    upcomingDiscountId: string | null,
+  ): boolean {
+    return !!currentDiscountId && !!upcomingDiscountId && currentDiscountId !== upcomingDiscountId;
+  }
+
+  /**
    * Send out a renewal reminder email if we haven't already sent one.
    */
   async sendSubscriptionRenewalReminderEmail(
     subscription: Stripe.Subscription,
-    planId: string
+    planId: string,
+    reminderDuration?: Duration
   ): Promise<boolean> {
     const { customer } = subscription;
     if (typeof customer === 'string' || customer?.deleted) {
@@ -276,7 +318,13 @@ export class SubscriptionReminders {
       );
       return false;
     }
-    const emailParams = { subscriptionId: subscription.id };
+
+    const effectiveReminderDuration = reminderDuration || this.reminderDuration;
+    const emailParams = {
+      subscriptionId: subscription.id,
+      reminderDays: effectiveReminderDuration.as('days'),
+    };
+
     if (
       await this.alreadySentEmail(
         uid,
@@ -289,13 +337,6 @@ export class SubscriptionReminders {
     }
     try {
       const account = await this.db.account(uid);
-      this.log.info('sendSubscriptionRenewalReminderEmail', {
-        message: 'Sending a renewal reminder email.',
-        subscriptionId: subscription.id,
-        currentPeriodStart: subscription.current_period_start,
-        currentPeriodEnd: subscription.current_period_end,
-        currentDateMs: Date.now(),
-      });
       const { email } = account;
       const formattedSubscription =
         await this.stripeHelper.formatSubscriptionForEmail(subscription);
@@ -305,6 +346,57 @@ export class SubscriptionReminders {
         await this.stripeHelper.previewInvoiceBySubscriptionId({
           subscriptionId: subscription.id,
         });
+
+      // Check latest invoice for current discount
+      let latestInvoice = subscription.latest_invoice;
+      if (typeof latestInvoice === 'string') {
+        latestInvoice = await this.stripeHelper.getInvoice(latestInvoice);
+      }
+      const currentDiscount = latestInvoice?.discount || latestInvoice?.discounts?.[0];
+      const currentDiscountId = typeof currentDiscount === 'string'
+        ? currentDiscount
+        : currentDiscount?.id ?? null;
+
+      // Check upcoming invoice for upcoming discount
+      const upcomingDiscount = invoicePreview.discount || invoicePreview.discounts?.[0];
+      const upcomingDiscountId = upcomingDiscount
+        ? typeof upcomingDiscount === 'string'
+          ? upcomingDiscount
+          : upcomingDiscount.id
+        : null;
+
+      // Detect if discount is ending
+      const discountEnding = this.hasDiscountEnding(currentDiscountId, upcomingDiscountId);
+      // Detect if renewal has a different discount
+      const hasDifferentDiscount = this.hasDifferentDiscount(currentDiscountId, upcomingDiscountId);
+
+      // Business rule: Monthly subscriptions only receive renewal reminders when a discount is ending,
+      // to avoid notification fatigue for standard monthly renewals.
+      if (interval === 'month' && !discountEnding) {
+        this.log.info('sendSubscriptionRenewalReminderEmail.skippingMonthlyNoDiscount', {
+          subscriptionId: subscription.id,
+          planId,
+        });
+        return false;
+      }
+
+      // If we reach here, we're sending the email
+      this.log.info('sendSubscriptionRenewalReminderEmail', {
+        message: 'Sending a renewal reminder email.',
+        subscriptionId: subscription.id,
+        currentPeriodStart: subscription.current_period_start,
+        currentPeriodEnd: subscription.current_period_end,
+        currentDateMs: Date.now(),
+        reminderLength: effectiveReminderDuration.as('days'),
+      });
+
+      let planInterval;
+      if (interval === 'month' && interval_count === 6) {
+        planInterval = 'halfyear';
+      } else {
+        planInterval = interval;
+      }
+
       await this.mailer.sendSubscriptionRenewalReminderEmail(
         account.emails,
         account,
@@ -313,14 +405,18 @@ export class SubscriptionReminders {
           email,
           acceptLanguage: account.locale,
           subscription: formattedSubscription,
-          reminderLength: this.reminderDuration.as('days'),
-          planIntervalCount: interval_count,
-          planInterval: interval,
+          reminderLength: effectiveReminderDuration.as('days'),
+          planInterval,
           // Using invoice prefix instead of plan to accommodate `yarn write-emails`.
+          showTax: (invoicePreview.tax ?? 0) > 0,
+          invoiceTotalExcludingTaxInCents: invoicePreview.total_excluding_tax,
+          invoiceTaxInCents: invoicePreview.tax,
           invoiceTotalInCents: invoicePreview.total,
           invoiceTotalCurrency: invoicePreview.currency,
           productMetadata: formattedSubscription.productMetadata,
           planConfig: formattedSubscription.planConfig,
+          discountEnding,
+          hasDifferentDiscount,
         }
       );
       await this.updateSentEmail(
@@ -377,25 +473,16 @@ export class SubscriptionReminders {
   }
 
   /**
-   * Sends a reminder email for all active subscriptions for all plans
-   * as long or longer than `planLength`:
-   *   1. Get a list of all plans of sufficient `planLength`
-   *   2. For each plan get active subscriptions with `current_period_end`
-   *      dates `reminderLength` away from now.
-   *   3. Send a reminder email if one hasn't already been sent.
-   *   4. If enabled, send subscription ending reminder emails if one
-   *      hasn't already been sent.
+   * Send renewal reminders for a specific time period and reminder duration.
    */
-  public async sendReminders() {
+  private async sendRenewalRemindersForDuration(
+    plans: Plan[],
+    reminderDuration: Duration
+  ): Promise<boolean> {
     let success = true;
+    const timePeriod = this.getStartAndEndTimes(reminderDuration);
 
-    // 1
-    const plans = await this.getEligiblePlans();
-
-    // 2
-    const timePeriod = this.getStartAndEndTimes(this.reminderDuration);
     for (const { plan_id } of plans) {
-      // 3
       for await (const subscription of this.stripeHelper.findActiveSubscriptionsByPlanId(
         plan_id,
         {
@@ -406,18 +493,62 @@ export class SubscriptionReminders {
         try {
           await this.sendSubscriptionRenewalReminderEmail(
             subscription,
-            plan_id
+            plan_id,
+            reminderDuration
           );
         } catch (err) {
           this.log.error('sendSubscriptionRenewalReminderEmail', {
             err,
             subscriptionId: subscription.id,
+            reminderDuration: reminderDuration.as('days'),
           });
           reportSentryError(err);
           success = false;
         }
       }
     }
+
+    return success;
+  }
+
+  /**
+   * Sends a reminder email for all active subscriptions for all plans
+   * as long or longer than `planLength`:
+   *   1. Get a list of all plans of sufficient `planLength`
+   *   2. Send 15-day reminders for yearly plans (if enabled)
+   *   3. Send 7-day reminders for monthly plans
+   *   4. If enabled, send subscription ending reminder emails if one
+   *      hasn't already been sent.
+   */
+  public async sendReminders() {
+    let success = true;
+
+    // 1
+    const plans = await this.getEligiblePlans();
+
+    // 2 - Send 15-day reminders for yearly plans only
+    if (this.yearlyRenewalReminderDuration) {
+      this.log.info('sendReminders.yearlyRenewalReminders', {
+        reminderDays: this.yearlyRenewalReminderDuration.as('days'),
+      });
+      const yearlyPlans = plans.filter((plan) => plan.interval === 'year');
+      const yearlySuccess = await this.sendRenewalRemindersForDuration(
+        yearlyPlans,
+        this.yearlyRenewalReminderDuration
+      );
+      success = success && yearlySuccess;
+    }
+
+    // 3 - Send 7-day reminders for monthly plans (excluding yearly plans)
+    this.log.info('sendReminders.monthlyRenewalReminders', {
+      reminderDays: this.reminderDuration.as('days'),
+    });
+    const monthlyPlans = plans.filter((plan) => plan.interval !== 'year');
+    const monthlySuccess = await this.sendRenewalRemindersForDuration(
+      monthlyPlans,
+      this.reminderDuration
+    );
+    success = success && monthlySuccess;
 
     // 4
     if (this.endingReminderEnabled) {

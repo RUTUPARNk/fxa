@@ -31,7 +31,7 @@ export type SigninUnblockIntegration = Pick<
   | 'data'
   | 'isDesktopSync'
   | 'isFirefoxClientServiceRelay'
-  | 'isFirefoxClientServiceAiWindow'
+  | 'isFirefoxClientServiceSmartWindow'
   | 'isFirefoxNonSync'
   | 'getWebChannelServices'
   | 'wantsLogin'
@@ -51,7 +51,7 @@ export type SigninIntegration =
       | 'data'
       | 'isDesktopSync'
       | 'isFirefoxClientServiceRelay'
-      | 'isFirefoxClientServiceAiWindow'
+      | 'isFirefoxClientServiceSmartWindow'
       | 'isFirefoxNonSync'
       | 'getWebChannelServices'
       | 'getCmsInfo'
@@ -72,7 +72,7 @@ export type SigninOAuthIntegration = Pick<
   | 'data'
   | 'isDesktopSync'
   | 'isFirefoxClientServiceRelay'
-  | 'isFirefoxClientServiceAiWindow'
+  | 'isFirefoxClientServiceSmartWindow'
   | 'isFirefoxNonSync'
   | 'getWebChannelServices'
   | 'getCmsInfo'
@@ -108,7 +108,6 @@ export interface SigninProps {
   finishOAuthFlowHandler: FinishOAuthFlowHandler;
   localizedSuccessBannerHeading?: string;
   localizedSuccessBannerDescription?: string;
-  deeplink?: string;
   flowQueryParams?: QueryParams;
   useFxAStatusResult: UseFxAStatusResult;
   setCurrentSplitLayout?: (value: boolean) => void;

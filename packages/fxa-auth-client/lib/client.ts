@@ -47,6 +47,39 @@ export type CredentialStatus = {
   clientSalt?: string;
 };
 
+export interface SecurityEvent {
+  name: string;
+  createdAt: number;
+  verified?: boolean;
+}
+
+export interface AttachedClient {
+  clientId: string;
+  isCurrentSession: boolean;
+  userAgent: string;
+  deviceType: string | null;
+  deviceId: string | null;
+  name: string | null;
+  lastAccessTime: number;
+  lastAccessTimeFormatted: string;
+  approximateLastAccessTime: number | null;
+  approximateLastAccessTimeFormatted: string | null;
+  location?: {
+    city?: string | null;
+    country?: string | null;
+    state?: string | null;
+    stateCode?: string | null;
+  };
+  os: string | null;
+  sessionTokenId: string | null;
+  refreshTokenId: string | null;
+  scope: string[] | null;
+}
+
+export interface RecoveryKeyData {
+  recoveryData: string;
+}
+
 export type SignUpOptions = {
   keys?: boolean;
   service?: string;
@@ -264,14 +297,27 @@ export default class AuthClient {
     }
 
     extraHeaders.set('Content-Type', 'application/json');
+
+    const requestOptions: RequestInit = {
+      method,
+      headers: extraHeaders,
+      body: cleanStringify(payload),
+    };
+
+    // For specific endpoints + HTTPS, upgrade credentials to include cookies for WAF challenges
+    const includeCredentials = [
+      '/account/create',
+      '/password/forgot/send_otp',
+    ].some((endpoint) => path.startsWith(endpoint));
+
+    if (includeCredentials && new URL(this.uri).protocol === 'https:') {
+      requestOptions.credentials = 'include';
+    }
+
     try {
       const response = await fetchOrTimeout(
         this.url(path),
-        {
-          method,
-          headers: extraHeaders,
-          body: cleanStringify(payload),
-        },
+        requestOptions,
         this.timeout
       );
       const result = JSON.parse(await response.text());
@@ -1176,12 +1222,37 @@ export default class AuthClient {
     );
   }
 
+  async emailBounceStatus(
+    email: string,
+    headers?: Headers
+  ): Promise<{ hasHardBounce: boolean }> {
+    return this.request(
+      'POST',
+      '/account/email_bounce_status',
+      { email },
+      headers
+    );
+  }
+
   async accountProfile(sessionToken: hexstring, headers?: Headers) {
     return this.sessionGet('/account/profile', sessionToken, headers);
   }
 
   async account(sessionToken: hexstring, headers?: Headers) {
     return this.sessionGet('/account', sessionToken, headers);
+  }
+
+  async metricsOpt(
+    sessionToken: hexstring,
+    state: 'in' | 'out',
+    headers?: Headers
+  ): Promise<{}> {
+    return this.sessionPost(
+      '/account/metrics_opt',
+      sessionToken,
+      { state },
+      headers
+    );
   }
 
   async sessionDestroy(
@@ -1836,12 +1907,20 @@ export default class AuthClient {
     return this.sessionGet('/account/sessions', sessionToken, headers);
   }
 
-  async securityEvents(sessionToken: hexstring, headers?: Headers) {
+  async securityEvents(sessionToken: hexstring, headers?: Headers): Promise<SecurityEvent[]> {
     return this.sessionGet('/securityEvents', sessionToken, headers);
   }
 
-  async attachedClients(sessionToken: hexstring, headers?: Headers) {
+  async attachedClients(sessionToken: hexstring, headers?: Headers): Promise<AttachedClient[]> {
     return this.sessionGet('/account/attached_clients', sessionToken, headers);
+  }
+
+  async attachedOauthClients(sessionToken: hexstring, headers?: Headers) {
+    return this.sessionGet(
+      '/account/attached_oauth_clients',
+      sessionToken,
+      headers
+    );
   }
 
   async attachedClientDestroy(
@@ -1939,19 +2018,6 @@ export default class AuthClient {
    */
   async recoveryEmailCreate(jwt: string, email: string, headers?: Headers) {
     return this.jwtPost('/mfa/recovery_email', jwt, { email }, headers);
-  }
-
-  async recoveryEmailDestroy(
-    sessionToken: hexstring,
-    email: string,
-    headers?: Headers
-  ) {
-    return this.sessionPost(
-      '/recovery_email/destroy',
-      sessionToken,
-      { email },
-      headers
-    );
   }
 
   async recoveryEmailDestroyWithJwt(
@@ -2316,19 +2382,6 @@ export default class AuthClient {
   }
 
   /**
-   * @deprecated Use deleteTotpTokenWithJwt instead
-   *
-   * Disables 2FA Protection on the account.
-   *
-   * @param sessionToken - required, must be a verified session token
-   * @param headers - Optional additional headers for the request
-   * @returns A promise that resolves when the 2FA has been removed
-   */
-  async deleteTotpToken(sessionToken: hexstring, headers?: Headers) {
-    return this.sessionPost('/totp/destroy', sessionToken, {}, headers);
-  }
-
-  /**
    * Disables 2FA Protection on the account.
    *
    * @param jwt - required, must be a verified session token
@@ -2616,7 +2669,7 @@ export default class AuthClient {
     accountResetToken: hexstring,
     recoveryKeyId: string,
     headers?: Headers
-  ) {
+  ): Promise<RecoveryKeyData> {
     return this.hawkRequest(
       'GET',
       `/recoveryKey/${recoveryKeyId}`,

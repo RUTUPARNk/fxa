@@ -57,9 +57,7 @@ function renderWith(props?: any) {
 }
 
 const mockFormSubmit = jest.fn();
-// This prevents console errors when the deepLink logic is tested.
-// However, for some reason we cannot mock `requestSubmit` and we'll
-// still see errors logged for that.
+// jsdom does not implement HTMLFormElement.prototype.submit.
 HTMLFormElement.prototype.submit = mockFormSubmit;
 
 describe('ThirdPartyAuthComponent', () => {
@@ -141,36 +139,6 @@ describe('ThirdPartyAuthComponent', () => {
     ).not.toEqual('');
     expect(onContinueWithGoogle).toHaveBeenCalled();
     expect(onContinueWithApple).not.toHaveBeenCalled();
-  });
-
-  it('should deeplink directly to google auth, if deeplink=`googleLogin`', async () => {
-    renderWith({
-      enabled: true,
-      showSeparator: false,
-      deeplink: 'googleLogin',
-      view: 'index',
-    });
-
-    expect(
-      (await screen.findByTestId('google-signin-form-state')).getAttribute(
-        'value'
-      )
-    ).not.toEqual('');
-  });
-
-  it('should deeplink directly to apple auth, if deeplink=`appleLogin`', async () => {
-    renderWith({
-      enabled: true,
-      showSeparator: false,
-      deeplink: 'appleLogin',
-      view: 'index',
-    });
-
-    expect(
-      (await screen.findByTestId('apple-signin-form-state')).getAttribute(
-        'value'
-      )
-    ).not.toEqual('');
   });
 
   it('hides separator', async () => {

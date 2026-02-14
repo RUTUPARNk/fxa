@@ -151,7 +151,7 @@ function mockSyncDesktopV3Integration() {
     data: { service: 'sync' },
     isDesktopSync: () => true,
     isFirefoxClientServiceRelay: () => false,
-    isFirefoxClientServiceAiWindow: () => false,
+    isFirefoxClientServiceSmartWindow: () => false,
     isFirefoxNonSync: () => false,
     isFirefoxMobileClient: () => false,
     getCmsInfo: () => undefined,
@@ -172,7 +172,7 @@ function mockOAuthNativeIntegration(
     data: { service: 'sync' },
     isDesktopSync: () => true,
     isFirefoxClientServiceRelay: () => false,
-    isFirefoxClientServiceAiWindow: () => false,
+    isFirefoxClientServiceSmartWindow: () => false,
     isFirefoxNonSync: () => false,
     isFirefoxMobileClient: () => isFirefoxMobileClient,
     getCmsInfo: () => undefined,
@@ -195,7 +195,9 @@ describe('SetPassword-container', () => {
     mockCurrentAccount(storedAccount);
 
     render();
-    expect(mockNavigate).toHaveBeenCalledWith('/signin', { replace: true });
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/signin', { replace: true });
+    });
     expect(SetPasswordModule.default).not.toHaveBeenCalled();
   });
 

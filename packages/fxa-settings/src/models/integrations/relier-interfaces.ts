@@ -27,6 +27,18 @@ export interface RelierAccount {
   isDefault(): boolean;
 }
 
+/**
+ * Allowed font sizes for CMS-customizable headlines.
+ * Maps to Tailwind CSS font size utilities and Strapi enum values.
+ *
+ * The values match the Strapi GraphQL enum Enum_Componentaccountsshared_Headlinefontsize.
+ *
+ * - `default`: text-xl (22px)
+ * - `medium`: text-xxl (28px)
+ * - `large`: text-xxxl (32px)
+ */
+export type HeadlineFontSize = 'default' | 'medium' | 'large';
+
 export interface PageRelierCmsInfo {
   headline: string;
   description: string | undefined;
@@ -61,6 +73,9 @@ export interface SharedRelierCmsInfo {
   headerLogoAltText?: string | undefined;
   featureFlags?: FeatureFlagsRelierCmsInfo | undefined;
   favicon?: string | undefined;
+  headlineFontSize?: HeadlineFontSize | null;
+  headlineTextColor?: string | null;
+  additionalAccessibilityInfo?: string | undefined;
 }
 
 export interface FeatureFlagsRelierCmsInfo {

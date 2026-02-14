@@ -56,6 +56,7 @@ describe('checkPassword', () => {
   let customs, db, signinUtils;
 
   beforeEach(() => {
+    mocks.mockOAuthClientInfo();
     db = mocks.mockDB();
     customs = {
       v2Enabled: sinon.spy(() => true),
@@ -735,17 +736,21 @@ describe('sendSigninNotifications', () => {
     config,
     log,
     mailer,
+    fxaMailer,
     metricsContext,
     request,
     accountRecord,
     sessionToken,
-    sendSigninNotifications;
+    sendSigninNotifications,
+    clock;
   const defaultMockRequestData = (log, metricsContext) => ({
     log,
     metricsContext,
     clientAddress: CLIENT_ADDRESS,
     headers: {
       'user-agent': 'test user-agent',
+      'x-sigsci-requestid': 'test-sigsci-id',
+      'client-ja4': 'test-ja4',
     },
     query: {
       keys: false,
@@ -776,9 +781,14 @@ describe('sendSigninNotifications', () => {
   });
 
   beforeEach(() => {
+    // Freeze time at a specific timestamp for consistent test assertions
+    clock = sinon.useFakeTimers(1769555935958);
+
     db = mocks.mockDB();
     log = mocks.mockLog();
     mailer = mocks.mockMailer();
+    mocks.mockOAuthClientInfo();
+    fxaMailer = mocks.mockFxaMailer();
     metricsContext = mocks.mockMetricsContext();
     request = mocks.mockRequest(defaultMockRequestData(log, metricsContext));
     accountRecord = {
@@ -808,6 +818,12 @@ describe('sendSigninNotifications', () => {
       mailer,
       config,
     }).sendSigninNotifications;
+  });
+
+  afterEach(() => {
+    if (clock) {
+      clock.restore();
+    }
   });
 
   after(() => {
@@ -841,6 +857,8 @@ describe('sendSigninNotifications', () => {
         region: 'California',
         service: undefined,
         userAgent: 'test user-agent',
+        sigsciRequestId: 'test-sigsci-id',
+        clientJa4: 'test-ja4',
         uid: TEST_UID,
       });
 
@@ -863,9 +881,9 @@ describe('sendSigninNotifications', () => {
         countryCode: 'US',
       });
 
-      assert.notCalled(mailer.sendVerifyEmail);
-      assert.notCalled(mailer.sendVerifyLoginEmail);
-      assert.notCalled(mailer.sendVerifyLoginCodeEmail);
+      assert.notCalled(fxaMailer.sendVerifyEmail);
+      assert.notCalled(fxaMailer.sendVerifyLoginEmail);
+      assert.notCalled(fxaMailer.sendVerifyLoginCodeEmail);
 
       assert.calledOnce(db.securityEvent);
       assert.calledWithExactly(db.securityEvent, {
@@ -909,23 +927,36 @@ describe('sendSigninNotifications', () => {
 
         assert.calledOnce(metricsContext.stash);
 
-        assert.calledOnce(mailer.sendVerifyEmail);
-        assert.calledWithExactly(mailer.sendVerifyEmail, [], accountRecord, {
+        assert.calledOnce(fxaMailer.sendVerifyEmail);
+        assert.calledWithExactly(fxaMailer.sendVerifyEmail, {
+          to: 'test@example.com',
+          cc: [],
+          metricsEnabled: true,
+          uid: 'thisisauid',
+          deviceId: 'wibble',
+          flowId:
+            'F1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF103',
+          flowBeginTime: 1769555935958,
+          entrypoint: undefined,
+          sync: false,
           acceptLanguage: 'en-US',
-          code: 'emailVerifyCode',
-          deviceId: request.payload.metricsContext.deviceId,
-          flowBeginTime: request.payload.metricsContext.flowBeginTime,
-          flowId: request.payload.metricsContext.flowId,
-          service: undefined,
-          redirectTo: request.payload.redirectTo,
-          resume: request.payload.resume,
+          date: 'Tuesday, Jan 27, 2026',
+          time: '3:18:55 PM (PST)',
           timeZone: 'America/Los_Angeles',
-          uid: TEST_UID,
-          uaBrowser: 'Firefox Mobile',
-          uaBrowserVersion: '9',
-          uaOS: 'iOS',
-          uaOSVersion: '11',
-          uaDeviceType: 'tablet',
+          location: {
+            stateCode: 'CA',
+            country: 'United States',
+            city: 'Mountain View',
+          },
+          device: {
+            uaBrowser: 'Firefox Mobile',
+            uaOS: 'iOS',
+            uaOSVersion: '11',
+          },
+          code: 'emailVerifyCode',
+          resume: 'myResumeToken',
+          service: undefined,
+          redirectTo: 'redirectMeTo',
         });
 
         assert.calledThrice(log.flowEvent);
@@ -965,23 +996,36 @@ describe('sendSigninNotifications', () => {
           id: 'tokenVerifyCode',
         });
 
-        assert.calledOnce(mailer.sendVerifyEmail);
-        assert.calledWithExactly(mailer.sendVerifyEmail, [], accountRecord, {
+        assert.calledOnce(fxaMailer.sendVerifyEmail);
+        assert.calledWithExactly(fxaMailer.sendVerifyEmail, {
+          to: 'test@example.com',
+          cc: [],
+          metricsEnabled: true,
+          uid: 'thisisauid',
+          deviceId: 'wibble',
+          flowId:
+            'F1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF1031DF103',
+          flowBeginTime: 1769555935958,
+          entrypoint: undefined,
+          sync: false,
           acceptLanguage: 'en-US',
-          code: 'tokenVerifyCode', // the token verification code is used if available
-          deviceId: request.payload.metricsContext.deviceId,
-          flowBeginTime: request.payload.metricsContext.flowBeginTime,
-          flowId: request.payload.metricsContext.flowId,
-          service: undefined,
-          redirectTo: request.payload.redirectTo,
-          resume: request.payload.resume,
+          date: 'Tuesday, Jan 27, 2026',
+          time: '3:18:55 PM (PST)',
           timeZone: 'America/Los_Angeles',
-          uid: TEST_UID,
-          uaBrowser: 'Firefox Mobile',
-          uaBrowserVersion: '9',
-          uaOS: 'iOS',
-          uaOSVersion: '11',
-          uaDeviceType: 'tablet',
+          location: {
+            stateCode: 'CA',
+            country: 'United States',
+            city: 'Mountain View',
+          },
+          device: {
+            uaBrowser: 'Firefox Mobile',
+            uaOS: 'iOS',
+            uaOSVersion: '11',
+          },
+          code: 'tokenVerifyCode',
+          resume: 'myResumeToken',
+          service: undefined,
+          redirectTo: 'redirectMeTo',
         });
 
         assert.calledTwice(log.flowEvent);
@@ -1009,8 +1053,8 @@ describe('sendSigninNotifications', () => {
       assert.calledOnce(db.sessions);
       assert.calledOnce(log.activityEvent);
 
-      assert.notCalled(mailer.sendVerifyLoginEmail);
-      assert.notCalled(mailer.sendVerifyLoginCodeEmail);
+      assert.notCalled(fxaMailer.sendVerifyLoginEmail);
+      assert.notCalled(fxaMailer.sendVerifyLoginCodeEmail);
 
       assert.calledOnce(db.securityEvent);
     });
@@ -1047,10 +1091,10 @@ describe('sendSigninNotifications', () => {
           countryCode: 'US',
         });
 
-        assert.notCalled(mailer.sendVerifyEmail);
-        assert.notCalled(mailer.sendVerifyLoginEmail);
-        assert.notCalled(mailer.sendVerifyLoginCodeEmail);
-        assert.notCalled(mailer.sendNewDeviceLoginEmail);
+        assert.notCalled(fxaMailer.sendVerifyEmail);
+        assert.notCalled(fxaMailer.sendVerifyLoginEmail);
+        assert.notCalled(fxaMailer.sendVerifyLoginCodeEmail);
+        assert.notCalled(fxaMailer.sendNewDeviceLoginEmail);
 
         assert.calledTwice(log.flowEvent);
         assert.calledWithMatch(log.flowEvent.getCall(0), {
@@ -1079,38 +1123,39 @@ describe('sendSigninNotifications', () => {
         sessionToken,
         undefined
       ).then(() => {
-        assert.notCalled(mailer.sendVerifyEmail);
+        assert.notCalled(fxaMailer.sendVerifyEmail);
         assert.notCalled(mailer.sendVerifyLoginCodeEmail);
-        assert.calledOnce(mailer.sendVerifyLoginEmail);
-        assert.calledWithExactly(
-          mailer.sendVerifyLoginEmail,
-          accountRecord.emails,
-          accountRecord,
-          {
-            acceptLanguage: 'en-US',
-            code: 'tokenVerifyCode',
-            deviceId: request.payload.metricsContext.deviceId,
-            flowBeginTime: request.payload.metricsContext.flowBeginTime,
-            flowId: request.payload.metricsContext.flowId,
-            redirectTo: request.payload.redirectTo,
-            resume: request.payload.resume,
-            location: {
-              city: 'Mountain View',
-              country: 'United States',
-              countryCode: 'US',
-              state: 'California',
-              stateCode: 'CA',
-            },
-            service: undefined,
-            timeZone: 'America/Los_Angeles',
+        assert.calledOnce(fxaMailer.sendVerifyLoginEmail);
+        assert.calledWithExactly(fxaMailer.sendVerifyLoginEmail, {
+          to: TEST_EMAIL,
+          cc: [],
+          metricsEnabled: true,
+          uid: TEST_UID,
+          deviceId: request.payload.metricsContext.deviceId,
+          flowId: request.payload.metricsContext.flowId,
+          flowBeginTime: request.payload.metricsContext.flowBeginTime,
+          entrypoint: undefined,
+          sync: false,
+          acceptLanguage: 'en-US',
+          date: 'Tuesday, Jan 27, 2026',
+          time: '3:18:55 PM (PST)',
+          timeZone: 'America/Los_Angeles',
+          location: {
+            stateCode: 'CA',
+            country: 'United States',
+            city: 'Mountain View',
+          },
+          device: {
             uaBrowser: 'Firefox Mobile',
-            uaBrowserVersion: '9',
             uaOS: 'iOS',
             uaOSVersion: '11',
-            uaDeviceType: 'tablet',
-            uid: TEST_UID,
-          }
-        );
+          },
+          code: 'tokenVerifyCode',
+          clientName: 'sync',
+          redirectTo: request.payload.redirectTo,
+          service: undefined,
+          resume: request.payload.resume,
+        });
 
         assert.calledTwice(log.flowEvent);
         assert.calledWithMatch(log.flowEvent.getCall(0), {
@@ -1129,9 +1174,9 @@ describe('sendSigninNotifications', () => {
         sessionToken,
         'email'
       ).then(() => {
-        assert.notCalled(mailer.sendVerifyEmail);
-        assert.notCalled(mailer.sendVerifyLoginCodeEmail);
-        assert.calledOnce(mailer.sendVerifyLoginEmail);
+        assert.notCalled(fxaMailer.sendVerifyEmail);
+        assert.notCalled(fxaMailer.sendVerifyLoginCodeEmail);
+        assert.calledOnce(fxaMailer.sendVerifyLoginEmail);
 
         assert.calledTwice(log.flowEvent);
         assert.calledWithMatch(log.flowEvent.getCall(0), {
@@ -1144,42 +1189,42 @@ describe('sendSigninNotifications', () => {
     });
 
     it('emits correct notifications when verificationMethod=email-2fa', () => {
-      return sendSigninNotifications(
+      const oauthClientInfoMock = mocks.mockOAuthClientInfo({
+        fetch: sinon.stub().resolves({ name: undefined }),
+      });
+      // Re-initialize sendSigninNotifications to pick up the new mock
+      const localSendSigninNotifications = makeSigninUtils({
+        log,
+        db,
+        mailer,
+        config,
+      }).sendSigninNotifications;
+      return localSendSigninNotifications(
         request,
         accountRecord,
         sessionToken,
         'email-2fa'
       ).then(() => {
-        assert.notCalled(mailer.sendVerifyEmail);
-        assert.notCalled(mailer.sendVerifyLoginEmail);
-        assert.calledOnce(mailer.sendVerifyLoginCodeEmail);
+        assert.notCalled(fxaMailer.sendVerifyEmail);
+        assert.notCalled(fxaMailer.sendVerifyLoginEmail);
+        assert.calledOnce(fxaMailer.sendVerifyLoginCodeEmail);
 
         const expectedCode = otpUtils.generateOtpCode(
           accountRecord.primaryEmail.emailCode,
           otpOptions
         );
-        assert.calledWithExactly(
-          mailer.sendVerifyLoginCodeEmail,
-          accountRecord.emails,
-          accountRecord,
-          {
-            acceptLanguage: 'en-US',
-            code: expectedCode,
-            deviceId: request.payload.metricsContext.deviceId,
-            flowBeginTime: request.payload.metricsContext.flowBeginTime,
-            flowId: request.payload.metricsContext.flowId,
-            redirectTo: request.payload.redirectTo,
-            resume: request.payload.resume,
-            service: undefined,
-            timeZone: 'America/Los_Angeles',
-            uaBrowser: 'Firefox Mobile',
-            uaBrowserVersion: '9',
-            uaOS: 'iOS',
-            uaOSVersion: '11',
-            uaDeviceType: 'tablet',
-            uid: TEST_UID,
-          }
-        );
+        assert.calledWithMatch(fxaMailer.sendVerifyLoginCodeEmail, {
+          to: TEST_EMAIL,
+          cc: [],
+          metricsEnabled: true,
+          uid: TEST_UID,
+          code: expectedCode,
+          redirectTo: request.payload.redirectTo,
+          resume: request.payload.resume,
+          serviceName: undefined,
+        });
+
+        assert.calledOnce(oauthClientInfoMock.fetch);
 
         assert.calledTwice(log.flowEvent);
         assert.calledWithMatch(log.flowEvent.getCall(0), {
@@ -1198,9 +1243,9 @@ describe('sendSigninNotifications', () => {
         sessionToken,
         'email-captcha'
       ).then(() => {
-        assert.notCalled(mailer.sendVerifyEmail);
-        assert.notCalled(mailer.sendVerifyLoginEmail);
-        assert.notCalled(mailer.sendVerifyLoginCodeEmail);
+        assert.notCalled(fxaMailer.sendVerifyEmail);
+        assert.notCalled(fxaMailer.sendVerifyLoginEmail);
+        assert.notCalled(fxaMailer.sendVerifyLoginCodeEmail);
 
         assert.calledOnce(log.flowEvent);
         assert.calledWithMatch(log.flowEvent, { event: 'account.login' });
@@ -1240,10 +1285,12 @@ describe('sendSigninNotifications', () => {
 
   describe('email verification sending', () => {
     beforeEach(() => {
+      mocks.mockOAuthClientInfo();
       sessionToken.tokenVerified = false;
     });
 
     it('passes service parameter correctly when request wantsKeys', () => {
+      mocks.mockOAuthClientInfo();
       request.query.keys = true;
       request.query.service = 'sync';
       return sendSigninNotifications(
@@ -1252,23 +1299,33 @@ describe('sendSigninNotifications', () => {
         sessionToken,
         'email-otp'
       ).then(() => {
-        assert.calledOnce(mailer.sendVerifyLoginCodeEmail);
-        const callArgs = mailer.sendVerifyLoginCodeEmail.getCall(0).args[2];
-        assert.equal(callArgs.service, 'sync');
+        assert.calledOnce(fxaMailer.sendVerifyLoginCodeEmail);
+        const callArgs = fxaMailer.sendVerifyLoginCodeEmail.getCall(0).args[0];
+        assert.equal(callArgs.serviceName, 'sync');
       });
     });
 
     it('passes service parameter correctly when service is undefined', () => {
+      const oauthClientInfoMock = mocks.mockOAuthClientInfo();
       request.payload.service = undefined;
-      return sendSigninNotifications(
+
+      // Re-initialize sendSigninNotifications to pick up the new oauthClientInfoMock
+      const localSendSigninNotifications = makeSigninUtils({
+        log,
+        db,
+        mailer,
+        config,
+      }).sendSigninNotifications;
+
+      return localSendSigninNotifications(
         request,
         accountRecord,
         sessionToken,
         'email-otp'
       ).then(() => {
-        assert.calledOnce(mailer.sendVerifyLoginCodeEmail);
-        const callArgs = mailer.sendVerifyLoginCodeEmail.getCall(0).args[2];
-        assert.equal(callArgs.service, undefined);
+        assert.calledOnce(fxaMailer.sendVerifyLoginCodeEmail);
+        assert.calledOnce(oauthClientInfoMock.fetch);
+        assert.calledWith(oauthClientInfoMock.fetch, undefined);
       });
     });
 
@@ -1281,11 +1338,11 @@ describe('sendSigninNotifications', () => {
         sessionToken,
         'email-2fa'
       ).then(() => {
-        assert.calledOnce(mailer.sendVerifyLoginCodeEmail);
-        const callArgs = mailer.sendVerifyLoginCodeEmail.getCall(0).args[2];
-        assert.equal(callArgs.service, 'sync');
-        assert.notCalled(mailer.sendVerifyEmail);
-        assert.notCalled(mailer.sendVerifyLoginEmail);
+        assert.calledOnce(fxaMailer.sendVerifyLoginCodeEmail);
+        const callArgs = fxaMailer.sendVerifyLoginCodeEmail.getCall(0).args[0];
+        assert.equal(callArgs.serviceName, 'sync');
+        assert.notCalled(fxaMailer.sendVerifyEmail);
+        assert.notCalled(fxaMailer.sendVerifyLoginEmail);
       });
     });
 
@@ -1297,9 +1354,9 @@ describe('sendSigninNotifications', () => {
         sessionToken,
         'email-otp'
       ).then(() => {
-        assert.calledOnce(mailer.sendVerifyLoginCodeEmail);
-        assert.notCalled(mailer.sendVerifyEmail);
-        assert.notCalled(mailer.sendVerifyLoginEmail);
+        assert.calledOnce(fxaMailer.sendVerifyLoginCodeEmail);
+        assert.notCalled(fxaMailer.sendVerifyEmail);
+        assert.notCalled(fxaMailer.sendVerifyLoginEmail);
       });
     });
 
@@ -1311,9 +1368,9 @@ describe('sendSigninNotifications', () => {
         sessionToken,
         'email-otp'
       ).then(() => {
-        assert.notCalled(mailer.sendVerifyLoginCodeEmail);
-        assert.notCalled(mailer.sendVerifyEmail);
-        assert.notCalled(mailer.sendVerifyLoginEmail);
+        assert.notCalled(fxaMailer.sendVerifyLoginCodeEmail);
+        assert.notCalled(fxaMailer.sendVerifyEmail);
+        assert.notCalled(fxaMailer.sendVerifyLoginEmail);
       });
     });
 
@@ -1326,9 +1383,9 @@ describe('sendSigninNotifications', () => {
         'email-otp',
         true // passwordChangeRequired
       ).then(() => {
-        assert.calledOnce(mailer.sendVerifyLoginCodeEmail);
-        assert.notCalled(mailer.sendVerifyEmail);
-        assert.notCalled(mailer.sendVerifyLoginEmail);
+        assert.calledOnce(fxaMailer.sendVerifyLoginCodeEmail);
+        assert.notCalled(fxaMailer.sendVerifyEmail);
+        assert.notCalled(fxaMailer.sendVerifyLoginEmail);
       });
     });
   });
@@ -1338,6 +1395,9 @@ describe('sendSigninNotifications', () => {
       sessionToken.tokenVerified = false;
       sessionToken.tokenVerificationId = 'tokenVerifyCode';
       sessionToken.mustVerify = true;
+      mocks.mockOAuthClientInfo({
+        fetch: sinon.stub().resolves({ name: 'mockOauthClientName' }),
+      });
       const rpCmsConfig = {
         clientId: '00f00f',
         shared: {
@@ -1371,44 +1431,36 @@ describe('sendSigninNotifications', () => {
       return signinUtils
         .sendSigninNotifications(req, accountRecord, sessionToken, 'email-2fa')
         .then(() => {
-          assert.notCalled(mailer.sendVerifyEmail);
-          assert.notCalled(mailer.sendVerifyLoginEmail);
-          assert.calledOnce(mailer.sendVerifyLoginCodeEmail);
+          assert.notCalled(fxaMailer.sendVerifyEmail);
+          assert.notCalled(fxaMailer.sendVerifyLoginEmail);
+          assert.calledOnce(fxaMailer.sendVerifyLoginCodeEmail);
 
           const expectedCode = otpUtils.generateOtpCode(
             accountRecord.primaryEmail.emailCode,
             otpOptions
           );
-          assert.calledWithExactly(
-            mailer.sendVerifyLoginCodeEmail,
-            accountRecord.emails,
-            accountRecord,
-            {
-              acceptLanguage: 'en-US',
-              code: expectedCode,
-              deviceId: req.payload.metricsContext.deviceId,
-              flowBeginTime: req.payload.metricsContext.flowBeginTime,
-              flowId: req.payload.metricsContext.flowId,
-              redirectTo: req.payload.redirectTo,
-              resume: req.payload.resume,
-              service: undefined,
-              timeZone: 'America/Los_Angeles',
-              uaBrowser: 'Firefox Mobile',
-              uaBrowserVersion: '9',
-              uaOS: 'iOS',
-              uaOSVersion: '11',
-              uaDeviceType: 'tablet',
-              uid: TEST_UID,
-              target: 'strapi',
-              cmsRpClientId: rpCmsConfig.clientId,
-              cmsRpFromName: rpCmsConfig.shared?.emailFromName,
-              entrypoint: 'testo',
-              logoUrl: rpCmsConfig?.shared?.emailLogoUrl,
-              logoAltText: rpCmsConfig?.shared?.emailLogoAltText,
-              logoWidth: rpCmsConfig?.shared?.emailLogoWidth,
-              ...rpCmsConfig.VerifyLoginCodeEmail,
-            }
-          );
+          assert.calledWithMatch(fxaMailer.sendVerifyLoginCodeEmail, {
+            to: TEST_EMAIL,
+            cc: [],
+            metricsEnabled: true,
+            uid: TEST_UID,
+            code: expectedCode,
+            deviceId: req.payload.metricsContext.deviceId,
+            flowId: req.payload.metricsContext.flowId,
+            flowBeginTime: req.payload.metricsContext.flowBeginTime,
+            entrypoint: 'testo',
+            redirectTo: req.payload.redirectTo,
+            resume: req.payload.resume,
+            serviceName: 'mockOauthClientName',
+            cmsRpClientId: rpCmsConfig.clientId,
+            cmsRpFromName: rpCmsConfig.shared?.emailFromName,
+            logoUrl: rpCmsConfig?.shared?.emailLogoUrl,
+            logoAltText: rpCmsConfig?.shared?.emailLogoAltText,
+            logoWidth: rpCmsConfig?.shared?.emailLogoWidth,
+            subject: rpCmsConfig.VerifyLoginCodeEmail.subject,
+            headline: rpCmsConfig.VerifyLoginCodeEmail.headline,
+            description: rpCmsConfig.VerifyLoginCodeEmail.description,
+          });
         });
     });
   });
@@ -1508,6 +1560,7 @@ describe('createKeyFetchToken', () => {
     createKeyFetchToken;
 
   beforeEach(() => {
+    mocks.mockOAuthClientInfo();
     db = mocks.mockDB();
     password = {
       unwrap: sinon.spy(() => Promise.resolve(Buffer.from('abcdef123456'))),
@@ -1579,6 +1632,7 @@ describe('getSessionVerificationStatus', () => {
   let getSessionVerificationStatus;
 
   beforeEach(() => {
+    mocks.mockOAuthClientInfo();
     getSessionVerificationStatus = makeSigninUtils(
       {}
     ).getSessionVerificationStatus;
@@ -1668,6 +1722,7 @@ describe('cleanupReminders', () => {
   let cleanupReminders, mockCadReminders;
 
   beforeEach(() => {
+    mocks.mockOAuthClientInfo();
     mockCadReminders = mocks.mockCadReminders();
     cleanupReminders = makeSigninUtils({
       cadReminders: mockCadReminders,

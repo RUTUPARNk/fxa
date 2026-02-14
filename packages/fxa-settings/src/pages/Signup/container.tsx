@@ -10,6 +10,7 @@ import { useValidatedQueryParams } from '../../lib/hooks/useValidate';
 import { SignupQueryParams } from '../../models/pages/signup';
 import { BeginSignupHandler, SignupIntegration } from './interfaces';
 import { useCallback, useEffect } from 'react';
+import { handleAuthClientError } from './utils';
 import {
   getCredentials,
   getCredentialsV2,
@@ -18,7 +19,6 @@ import {
 import { createSaltV2 } from 'fxa-auth-client/lib/salt';
 import { SignUpOptions } from 'fxa-auth-client/lib/client';
 import { KeyStretchExperiment } from '../../models/experiments/key-stretch-experiment';
-import { handleAuthClientError } from './utils';
 import VerificationMethods from '../../constants/verification-methods';
 import { queryParamsToMetricsContext } from '../../lib/metrics';
 import { QueryParams } from '../..';
@@ -132,12 +132,14 @@ const SignupContainer = ({
         const credentialsV1 = await getCredentials(email, password);
 
         let credentialsV2 = undefined;
-        let v2Payload: {
-          wrapKb: string;
-          authPWVersion2: string;
-          wrapKbVersion2: string;
-          clientSalt: string;
-        } | {} = {};
+        let v2Payload:
+          | {
+              wrapKb: string;
+              authPWVersion2: string;
+              wrapKbVersion2: string;
+              clientSalt: string;
+            }
+          | {} = {};
 
         if (keyStretchExp.queryParamModel.isV2(config)) {
           credentialsV2 = await getCredentialsV2({
@@ -183,7 +185,14 @@ const SignupContainer = ({
         return handleAuthClientError(error);
       }
     },
-    [authClient, integration, wantsKeys, flowQueryParams, keyStretchExp.queryParamModel, config]
+    [
+      authClient,
+      integration,
+      wantsKeys,
+      flowQueryParams,
+      keyStretchExp.queryParamModel,
+      config,
+    ]
   );
 
   const cmsInfo = integration.getCmsInfo();
@@ -198,7 +207,6 @@ const SignupContainer = ({
     );
   }
 
-  const deeplink = queryParamModel.deeplink;
   const isMobile = isMobileDevice();
 
   return (
@@ -208,7 +216,6 @@ const SignupContainer = ({
         email,
         beginSignupHandler,
         useFxAStatusResult,
-        deeplink,
         flowQueryParams,
         isMobile,
         setCurrentSplitLayout,

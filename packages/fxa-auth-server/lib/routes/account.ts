@@ -10,6 +10,8 @@ import { WrappedErrorCodes } from 'fxa-shared/email/emailValidatorErrors';
 import TopEmailDomains from 'fxa-shared/email/topEmailDomains';
 import { tryResolveIpv4, tryResolveMx } from 'fxa-shared/email/validateEmail';
 import ScopeSet from 'fxa-shared/oauth/scopes';
+import { OAUTH_SCOPE_OLD_SYNC } from 'fxa-shared/oauth/constants';
+import { list as listAuthorizedClients } from '../oauth/authorized_clients';
 import { WebSubscription } from 'fxa-shared/subscriptions/types';
 import isA from 'joi';
 import Stripe from 'stripe';
@@ -34,7 +36,7 @@ import {
   playStoreSubscriptionPurchaseToPlayStoreSubscriptionDTO,
 } from '../payments/iap/iap-formatter';
 import { StripeHelper } from '../payments/stripe';
-import { AuthLogger, AuthRequest } from '../types';
+import { AuthClientInfoService, AuthLogger, AuthRequest } from '../types';
 import { deleteAccountIfUnverified, fetchRpCmsData } from './utils/account';
 import emailUtils from './utils/email';
 import requestHelper from './utils/request_helper';
@@ -44,6 +46,7 @@ import { gleanMetrics } from '../metrics/glean';
 import { AccountDeleteManager } from '../account-delete';
 import { uuidTransformer } from 'fxa-shared/db/transformers';
 import { normalizeEmail } from 'fxa-shared/email/helpers';
+import { EmailNormalization } from 'fxa-shared/email/email-normalization';
 import { DeleteAccountTasks, ReasonForDeletion } from '@fxa/shared/cloud-tasks';
 import { ProfileClient } from '@fxa/profile/client';
 import { DB } from '../db';
@@ -56,6 +59,12 @@ import { RelyingPartyConfigurationManager } from '@fxa/shared/cms';
 import { OtpUtils } from './utils/otp';
 import { getExistingSecondaryEmailRecord } from './emails';
 import { Redis } from 'ioredis';
+import { FxaMailer } from '../senders/fxa-mailer';
+import { FxaMailerFormat } from '../senders/fxa-mailer-format';
+import { OAuthClientInfoServiceName } from '../senders/oauth_client_info';
+import { BackupCodeManager } from '@fxa/accounts/two-factor';
+import { RecoveryPhoneService } from '@fxa/accounts/recovery-phone';
+import { BOUNCE_TYPE_HARD } from '@fxa/accounts/email-sender';
 
 const METRICS_CONTEXT_SCHEMA = require('../metrics/context').schema;
 
@@ -78,6 +87,8 @@ export class AccountHandler {
   private accountTasks: DeleteAccountTasks;
   private profileClient: ProfileClient;
   private readonly cmsManager: RelyingPartyConfigurationManager | null;
+  private fxaMailer: FxaMailer;
+  private oauthClientInfoService: AuthClientInfoService;
 
   constructor(
     private log: AuthLogger,
@@ -115,6 +126,8 @@ export class AccountHandler {
     this.cmsManager = Container.has(RelyingPartyConfigurationManager)
       ? Container.get(RelyingPartyConfigurationManager)
       : null;
+    this.fxaMailer = Container.get(FxaMailer);
+    this.oauthClientInfoService = Container.get(OAuthClientInfoServiceName);
   }
 
   private async generateRandomValues() {
@@ -396,28 +409,43 @@ export class AccountHandler {
           break;
         }
         default: {
-          await this.mailer.sendVerifyEmail([], account, {
-            code: account.emailCode,
-            service: form.service || query.service,
-            redirectTo: form.redirectTo,
-            resume: form.resume,
-            acceptLanguage: locale,
-            deviceId,
-            flowId,
-            flowBeginTime,
-            productId,
-            planId,
-            ip,
-            location: request.app.geo.location,
-            timeZone: request.app.geo.timeZone,
-            style,
-            uaBrowser: sessionToken.uaBrowser,
-            uaBrowserVersion: sessionToken.uaBrowserVersion,
-            uaOS: sessionToken.uaOS,
-            uaOSVersion: sessionToken.uaOSVersion,
-            uaDeviceType: sessionToken.uaDeviceType,
-            uid: sessionToken.uid,
-          });
+          if (this.fxaMailer.canSend('verify')) {
+            await this.fxaMailer.sendVerifyEmail({
+              ...FxaMailerFormat.account(account),
+              ...(await FxaMailerFormat.metricsContext(request)),
+              ...FxaMailerFormat.sync(form.service || query.service),
+              ...FxaMailerFormat.localTime(request),
+              ...FxaMailerFormat.location(request),
+              ...FxaMailerFormat.device(request),
+              code: account.emailCode,
+              resume: form.resume,
+              redirectTo: form.redirectTo,
+              service: form.service || query.service,
+            });
+          } else {
+            await this.mailer.sendVerifyEmail([], account, {
+              code: account.emailCode,
+              service: form.service || query.service,
+              redirectTo: form.redirectTo,
+              resume: form.resume,
+              acceptLanguage: locale,
+              deviceId,
+              flowId,
+              flowBeginTime,
+              productId,
+              planId,
+              ip,
+              location: request.app.geo.location,
+              timeZone: request.app.geo.timeZone,
+              style,
+              uaBrowser: sessionToken.uaBrowser,
+              uaBrowserVersion: sessionToken.uaBrowserVersion,
+              uaOS: sessionToken.uaOS,
+              uaOSVersion: sessionToken.uaOSVersion,
+              uaDeviceType: sessionToken.uaDeviceType,
+              uid: sessionToken.uid,
+            });
+          }
         }
       }
 
@@ -1369,28 +1397,63 @@ export class AccountHandler {
               uid: sessionToken.uid,
             };
             if (!rpCmsConfig || !rpCmsConfig.NewDeviceLoginEmail) {
-              await this.mailer.sendNewDeviceLoginEmail(
-                accountRecord.emails,
-                accountRecord,
-                emailContext
-              );
+              if (this.fxaMailer.canSend('newDeviceLogin')) {
+                const clientInfo =
+                  await this.oauthClientInfoService.fetch(service);
+                await this.fxaMailer.sendNewDeviceLoginEmail({
+                  ...FxaMailerFormat.account(accountRecord),
+                  ...FxaMailerFormat.device(request),
+                  ...FxaMailerFormat.localTime(request),
+                  ...FxaMailerFormat.location(request),
+                  ...(await FxaMailerFormat.metricsContext(request)),
+                  ...FxaMailerFormat.sync(service),
+                  clientName: clientInfo.name,
+                  showBannerWarning: false,
+                });
+              } else {
+                await this.mailer.sendNewDeviceLoginEmail(
+                  accountRecord.emails,
+                  accountRecord,
+                  emailContext
+                );
+              }
             } else {
-              const rpEmailContext = {
-                ...emailContext,
-                target: 'strapi',
-                cmsRpClientId: rpCmsConfig.clientId,
-                cmsRpFromName: rpCmsConfig.shared?.emailFromName,
-                entrypoint,
-                logoUrl: rpCmsConfig?.shared?.emailLogoUrl,
-                logoAltText: rpCmsConfig?.shared?.emailLogoAltText,
-                logoWidth: rpCmsConfig?.shared?.emailLogoWidth,
-                ...rpCmsConfig.NewDeviceLoginEmail,
-              };
-              await this.mailer.sendNewDeviceLoginEmail(
-                accountRecord.emails,
-                accountRecord,
-                rpEmailContext
-              );
+              if (this.fxaMailer.canSend('newDeviceLogin')) {
+                const clientInfo =
+                  await this.oauthClientInfoService.fetch(service);
+                await this.fxaMailer.sendNewDeviceLoginEmail({
+                  ...FxaMailerFormat.account(accountRecord),
+                  ...FxaMailerFormat.device(request),
+                  ...FxaMailerFormat.localTime(request),
+                  ...FxaMailerFormat.location(request),
+                  ...(await FxaMailerFormat.metricsContext(request)),
+                  ...FxaMailerFormat.sync(service),
+                  ...FxaMailerFormat.cmsLogo(rpCmsConfig.shared),
+                  ...FxaMailerFormat.cmsEmailSubject(
+                    rpCmsConfig.NewDeviceLoginEmail
+                  ),
+                  ...FxaMailerFormat.cmsRpInfo(rpCmsConfig),
+                  clientName: clientInfo.name,
+                  showBannerWarning: false,
+                });
+              } else {
+                const rpEmailContext = {
+                  ...emailContext,
+                  target: 'strapi',
+                  cmsRpClientId: rpCmsConfig.clientId,
+                  cmsRpFromName: rpCmsConfig.shared?.emailFromName,
+                  entrypoint,
+                  logoUrl: rpCmsConfig?.shared?.emailLogoUrl,
+                  logoAltText: rpCmsConfig?.shared?.emailLogoAltText,
+                  logoWidth: rpCmsConfig?.shared?.emailLogoWidth,
+                  ...rpCmsConfig.NewDeviceLoginEmail,
+                };
+                await this.mailer.sendNewDeviceLoginEmail(
+                  accountRecord.emails,
+                  accountRecord,
+                  rpEmailContext
+                );
+              }
             }
           } catch (err) {
             // If we couldn't email them, no big deal. Log
@@ -1562,6 +1625,9 @@ export class AccountHandler {
         result.hasPassword = account.verifierSetAt > 0;
       } else {
         const exist = await this.db.accountExists(email);
+        if (!exist) {
+          await this.customs.check(request, email, 'accountStatusCheckFailed');
+        }
         result.exists = exist;
       }
 
@@ -1582,6 +1648,65 @@ export class AccountHandler {
         return result;
       }
       throw err;
+    }
+  }
+
+  async emailBounceStatus(request: AuthRequest) {
+    const { email } = request.payload as { email: string };
+
+    await this.customs.check(request, email, 'emailBounceStatusCheck');
+
+    try {
+      const bouncesConfig = this.config.smtp?.bounces || {};
+      const aliasCheckEnabled = !!bouncesConfig.aliasCheckEnabled;
+
+      let bounces: Array<{ bounceType: number }>;
+
+      if (aliasCheckEnabled) {
+        // Check bounces with email alias normalization
+        // Given an email alias like test+123@domain.com:
+        // We look for bounces to the 'root' email -> `test@domain.com`
+        // And look for bounces to the alias with a wildcard -> `test+%@domain.com`
+        const emailNormalization = new EmailNormalization(
+          bouncesConfig.emailAliasNormalization
+        );
+        const normalizedEmail = emailNormalization.normalizeEmailAliases(
+          email,
+          ''
+        );
+        const wildcardEmail = emailNormalization.normalizeEmailAliases(
+          email,
+          '+%'
+        );
+
+        const [normalizedBounces, wildcardBounces] = await Promise.all([
+          this.db.emailBounces(normalizedEmail),
+          this.db.emailBounces(wildcardEmail),
+        ]);
+
+        // Combine and dedupe bounces by email and createdAt
+        const seen = new Set<string>();
+        bounces = [...normalizedBounces, ...wildcardBounces].filter(
+          (bounce: { email: string; createdAt: number }) => {
+            const key = `${bounce.email}:${bounce.createdAt}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          }
+        );
+      } else {
+        bounces = await this.db.emailBounces(email);
+      }
+
+      const hasHardBounce = bounces.some(
+        (bounce: { bounceType: number }) =>
+          bounce.bounceType === BOUNCE_TYPE_HARD
+      );
+      return { hasHardBounce };
+    } catch (err) {
+      this.log.error('emailBounceStatus.error', { err });
+      // Return false on error to not block user flow
+      return { hasHardBounce: false };
     }
   }
 
@@ -1847,17 +1972,42 @@ export class AccountHandler {
         // successful login. The `isFirefoxMobileClient` option matches the
         // client-side check against `integration.isFirefoxMobileClient()`.
         if (hasTotpToken || isFirefoxMobileClient) {
-          return await this.mailer.sendPasswordResetWithRecoveryKeyPromptEmail(
-            account.emails,
-            account,
-            emailOptions
-          );
+          if (this.fxaMailer.canSend('passwordResetWithRecoveryKeyPrompt')) {
+            return await this.fxaMailer.sendPasswordResetWithRecoveryKeyPromptEmail(
+              {
+                ...FxaMailerFormat.account(account),
+                ...(await FxaMailerFormat.metricsContext(request)),
+                ...FxaMailerFormat.localTime(request),
+                ...FxaMailerFormat.location(request),
+                ...FxaMailerFormat.device(request),
+                ...FxaMailerFormat.sync(false),
+              }
+            );
+          } else {
+            return await this.mailer.sendPasswordResetWithRecoveryKeyPromptEmail(
+              account.emails,
+              account,
+              emailOptions
+            );
+          }
         } else {
-          return await this.mailer.sendPasswordResetAccountRecoveryEmail(
-            account.emails,
-            account,
-            emailOptions
-          );
+          if (this.fxaMailer.canSend('passwordResetAccountRecovery')) {
+            return await this.fxaMailer.sendPasswordResetAccountRecoveryEmail({
+              ...FxaMailerFormat.account(account),
+              ...(await FxaMailerFormat.metricsContext(request)),
+              ...FxaMailerFormat.localTime(request),
+              ...FxaMailerFormat.location(request),
+              ...FxaMailerFormat.device(request),
+              ...FxaMailerFormat.sync(false),
+              productName: 'Firefox',
+            });
+          } else {
+            return await this.mailer.sendPasswordResetAccountRecoveryEmail(
+              account.emails,
+              account,
+              emailOptions
+            );
+          }
         }
       }
     };
@@ -2147,11 +2297,134 @@ export class AccountHandler {
     return {};
   }
 
+  async metricsOpt(request: AuthRequest) {
+    this.log.begin('Account.metricsOpt', request);
+
+    const { uid } = request.auth.credentials as { uid: string };
+    const { state } = request.payload as { state: 'in' | 'out' };
+    const account = await this.db.account(uid);
+    const email = account.primaryEmail?.email;
+
+    await this.customs.checkAuthenticated(
+      request,
+      uid,
+      email,
+      'metricsOpt'
+    );
+
+    await Account.setMetricsOpt(uid, state);
+    await this.profileClient.deleteCache(uid);
+    await this.log.notifyAttachedServices('profileDataChange', request, {
+      uid,
+    });
+
+    return {};
+  }
+
   async getAccount(request: AuthRequest) {
     this.log.begin('Account.get', request);
 
-    const { uid } = request.auth.credentials;
+    const { uid } = request.auth.credentials as { uid: string };
 
+    // Fetch all data in parallel for better performance
+    const [
+      accountRecord,
+      emails,
+      linkedAccountsResult,
+      totpResult,
+      backupCodesResult,
+      recoveryKeyResult,
+      recoveryPhoneResult,
+      recoveryPhoneAvailableResult,
+      securityEventsResult,
+      devicesResult,
+      authorizedClientsResult,
+    ] = await Promise.allSettled([
+      this.db.account(uid),
+      this.db.accountEmails(uid),
+      this.db.getLinkedAccounts(uid),
+      this.db.totpToken(uid),
+      Container.get(BackupCodeManager).getCountForUserId(uid),
+      this.db.getRecoveryKeyRecordWithHint(uid),
+      Container.get(RecoveryPhoneService).hasConfirmed(uid),
+      request.app.geo?.location?.countryCode
+        ? Container.get(RecoveryPhoneService).available(uid, request.app.geo.location.countryCode)
+        : Promise.resolve(false),
+      this.db.securityEventsByUid({ uid }),
+      this.db.devices(uid),
+      listAuthorizedClients(uid),
+    ]);
+
+    const recoveryPhoneAvailable = recoveryPhoneAvailableResult.status === 'fulfilled'
+      ? recoveryPhoneAvailableResult.value
+      : false;
+
+    // Account record is required
+    if (accountRecord.status === 'rejected') {
+      throw accountRecord.reason;
+    }
+    const account = accountRecord.value;
+
+    // Format emails
+    const formattedEmails = emails.status === 'fulfilled'
+      ? emails.value.map((email: { email: string; isPrimary: boolean; isVerified: boolean }) => ({
+          email: email.email,
+          isPrimary: email.isPrimary,
+          verified: email.isVerified,
+        }))
+      : [];
+
+    // Format linked accounts
+    const linkedAccounts = linkedAccountsResult.status === 'fulfilled'
+      ? linkedAccountsResult.value.map((la: { providerId: number; authAt: number; enabled: boolean }) => ({
+          providerId: la.providerId,
+          authAt: la.authAt,
+          enabled: la.enabled,
+        }))
+      : [];
+
+    // Format TOTP status
+    const totp = totpResult.status === 'fulfilled' && totpResult.value
+      ? { exists: true, verified: !!totpResult.value.verified }
+      : { exists: false, verified: false };
+
+    // Format backup codes status
+    const backupCodes = backupCodesResult.status === 'fulfilled'
+      ? backupCodesResult.value
+      : { hasBackupCodes: false, count: 0 };
+
+    // Calculate estimated sync device count (for recovery key promo eligibility)
+    const devicesCount = devicesResult.status === 'fulfilled' ? devicesResult.value.length : 0;
+    const authorizedClients = authorizedClientsResult.status === 'fulfilled' ? authorizedClientsResult.value : [];
+    const syncOAuthClientsCount = authorizedClients.filter(
+      (client: { scope?: string }) => client.scope && client.scope.includes(OAUTH_SCOPE_OLD_SYNC)
+    ).length;
+    const estimatedSyncDeviceCount = Math.max(devicesCount, syncOAuthClientsCount);
+
+    // Format recovery key status
+    const recoveryKey = recoveryKeyResult.status === 'fulfilled' && recoveryKeyResult.value
+      ? { exists: true, estimatedSyncDeviceCount }
+      : { exists: false, estimatedSyncDeviceCount };
+
+    // Format recovery phone status
+    const recoveryPhoneData = recoveryPhoneResult.status === 'fulfilled'
+      ? recoveryPhoneResult.value
+      : { exists: false, phoneNumber: null };
+    const recoveryPhone = {
+      ...recoveryPhoneData,
+      available: recoveryPhoneAvailable,
+    };
+
+    // Format security events
+    const securityEvents = securityEventsResult.status === 'fulfilled'
+      ? securityEventsResult.value.map((e: { name: string; createdAt: number; verified?: boolean }) => ({
+          name: e.name,
+          createdAt: e.createdAt,
+          verified: e.verified,
+        }))
+      : [];
+
+    // Fetch subscriptions (separate block due to complexity)
     let webSubscriptions: Awaited<WebSubscription[]> = [];
     let iapGooglePlaySubscriptions: Awaited<PlayStoreSubscription[]> = [];
     let iapAppStoreSubscriptions: Awaited<AppStoreSubscription[]> = [];
@@ -2188,6 +2461,23 @@ export class AccountHandler {
     }
 
     return {
+      // Account metadata
+      createdAt: account.createdAt,
+      passwordCreatedAt: account.verifierSetAt,
+      metricsOptOutAt: account.metricsOptOutAt,
+      hasPassword: account.verifierSetAt > 0,
+      // Emails
+      emails: formattedEmails,
+      // Linked accounts
+      linkedAccounts,
+      // 2FA status
+      totp,
+      backupCodes,
+      recoveryKey,
+      recoveryPhone,
+      // Security events
+      securityEvents,
+      // Subscriptions
       subscriptions: [
         ...iapGooglePlaySubscriptions,
         ...iapAppStoreSubscriptions,
@@ -2234,12 +2524,21 @@ export const accountRoutes = (
     statsd,
     authServerCacheRedis
   );
+
+  // Enable CORS credentials only when using explicit origins (not wildcard, per CORS spec)
+  const enableCredentials = config.corsOrigin && config.corsOrigin[0] !== '*';
+
   const routes = [
     {
       method: 'POST',
       path: '/account/create',
       options: {
         ...ACCOUNT_DOCS.ACCOUNT_CREATE_POST,
+        ...(enableCredentials && {
+          cors: {
+            credentials: true,
+          },
+        }),
         validate: {
           query: isA.object({
             keys: isA.boolean().optional().description(DESCRIPTION.keys),
@@ -2515,6 +2814,25 @@ export const accountRoutes = (
         accountHandler.accountStatusCheck(request),
     },
     {
+      method: 'POST',
+      path: '/account/email_bounce_status',
+      options: {
+        ...ACCOUNT_DOCS.ACCOUNT_EMAIL_BOUNCE_STATUS_POST,
+        validate: {
+          payload: isA.object({
+            email: validators.email().required(),
+          }),
+        },
+        response: {
+          schema: isA.object({
+            hasHardBounce: isA.boolean().required(),
+          }),
+        },
+      },
+      handler: (request: AuthRequest) =>
+        accountHandler.emailBounceStatus(request),
+    },
+    {
       method: 'GET',
       path: '/account/profile',
       options: {
@@ -2657,7 +2975,14 @@ export const accountRoutes = (
             }),
         },
       },
-      handler: async (request: AuthRequest) => accountHandler.reset(request),
+      handler: async (request: AuthRequest) => {
+        try {
+          return accountHandler.reset(request);
+        } catch (err) {
+          console.log('!!!', err);
+          throw err;
+        }
+      },
     },
     {
       method: 'POST',
@@ -2699,6 +3024,22 @@ export const accountRoutes = (
         accountHandler.getCredentialsStatus(request),
     },
     {
+      method: 'POST',
+      path: '/account/metrics_opt',
+      options: {
+        ...ACCOUNT_DOCS.ACCOUNT_METRICS_OPT_POST,
+        auth: {
+          strategy: 'sessionToken',
+        },
+        validate: {
+          payload: isA.object({
+            state: isA.string().valid('in', 'out').required(),
+          }),
+        },
+      },
+      handler: (request: AuthRequest) => accountHandler.metricsOpt(request),
+    },
+    {
       method: 'GET',
       path: '/account',
       options: {
@@ -2715,6 +3056,66 @@ export const accountRoutes = (
             // backend. Discussion in:
             //
             // https://github.com/mozilla/fxa/issues/1808
+            createdAt: isA.number().optional(),
+            passwordCreatedAt: isA.number().optional(),
+            metricsOptOutAt: isA.number().allow(null).optional(),
+            hasPassword: isA.boolean().optional(),
+            emails: isA
+              .array()
+              .items(
+                isA.object({
+                  email: isA.string().required(),
+                  isPrimary: isA.boolean().required(),
+                  verified: isA.boolean().required(),
+                })
+              )
+              .optional(),
+            linkedAccounts: isA
+              .array()
+              .items(
+                isA.object({
+                  providerId: isA.number().required(),
+                  authAt: isA.number().required(),
+                  enabled: isA.boolean().required(),
+                })
+              )
+              .optional(),
+            totp: isA
+              .object({
+                exists: isA.boolean().required(),
+                verified: isA.boolean().required(),
+              })
+              .optional(),
+            backupCodes: isA
+              .object({
+                hasBackupCodes: isA.boolean().required(),
+                count: isA.number().required(),
+              })
+              .optional(),
+            recoveryKey: isA
+              .object({
+                exists: isA.boolean().required(),
+                estimatedSyncDeviceCount: isA.number().optional(),
+              })
+              .optional(),
+            recoveryPhone: isA
+              .object({
+                exists: isA.boolean().required(),
+                phoneNumber: isA.string().allow(null).optional(),
+                nationalFormat: isA.string().allow(null).optional(),
+                available: isA.boolean().required(),
+              })
+              .optional(),
+            securityEvents: isA
+              .array()
+              .items(
+                isA.object({
+                  name: isA.string().required(),
+                  createdAt: isA.number().required(),
+                  verified: isA.boolean().required(),
+                })
+              )
+              .optional(),
             subscriptions: isA
               .array()
               .items(

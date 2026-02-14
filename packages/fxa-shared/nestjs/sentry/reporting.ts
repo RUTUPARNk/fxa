@@ -6,28 +6,8 @@ import { ApolloServerErrorCode } from '@apollo/server/errors';
 import { GraphQLError } from 'graphql';
 import { GqlContextType, GqlExecutionContext } from '@nestjs/graphql';
 import * as Sentry from '@sentry/node';
-import { ErrorEvent } from '@sentry/core';
 import { Message } from '@aws-sdk/client-sqs';
 import { Request } from 'express';
-
-import { CommonPiiActions } from '../../sentry/pii-filter-actions';
-import { SentryPiiFilter, SqsMessageFilter } from '../../sentry/pii-filters';
-
-const piiFilter = new SentryPiiFilter([
-  CommonPiiActions.breadthFilter,
-  CommonPiiActions.depthFilter,
-  CommonPiiActions.piiKeys,
-  CommonPiiActions.emailValues,
-  CommonPiiActions.tokenValues,
-  CommonPiiActions.ipV4Values,
-  CommonPiiActions.ipV6Values,
-  CommonPiiActions.urlUsernamePassword,
-]);
-
-const sqsMessageFilter = new SqsMessageFilter([
-  CommonPiiActions.emailValues,
-  CommonPiiActions.tokenValues,
-]);
 
 export interface ExtraContext {
   name: string;
@@ -77,34 +57,6 @@ export function isOriginallyHttpError(
 }
 
 /**
- * Filters all of an objects string properties to remove tokens.
- *
- * @param event Sentry ErrorEvent
- */
-export function filterObject(event: ErrorEvent) {
-  return piiFilter.filter(event);
-}
-
-/**
- * Filter potential PII from a sentry event.
- *
- * - Limits depth data beyond 5 levels
- * - Filters out pii keys, See CommonPiiActions.piiKeys for more details
- * - Filters out strings that look like emails addresses
- * - Filters out strings that look like tokens value (32 char length alphanumeric values)
- * - Filters out strings that look like ip addresses (v4/v6)
- * - Filters out urls with user name / password data
- * @param event A sentry event
- * @returns a sanitized sentry event
- */
-export function filterSentryEvent(
-  event: ErrorEvent,
-  _hint: unknown
-): ErrorEvent {
-  return piiFilter.filter(event);
-}
-
-/**
  * Capture a SQS Error to Sentry with additional context.
  *
  * @param err Error object to capture.
@@ -113,7 +65,6 @@ export function filterSentryEvent(
 export function captureSqsError(err: Error, message?: Message): void {
   Sentry.withScope((scope) => {
     if (message?.Body) {
-      message = sqsMessageFilter.filter(message);
       scope.setContext('SQS Message', message as Record<string, unknown>);
     }
     Sentry.captureException(err);
@@ -140,7 +91,9 @@ export function reportRequestException(
   Sentry.withScope((scope: Sentry.Scope) => {
     scope.addEventProcessor((event: Sentry.Event) => {
       if (request) {
-        event.request = Sentry.extractRequestData(request);
+        // As of sentry v9, this should automatically happen by adding, Sentry.requestDataIntegration()
+        // Leaving note here for historical context.
+        // event.request = Sentry.extractRequestData(request);
         event.level = 'error';
         return event;
       }

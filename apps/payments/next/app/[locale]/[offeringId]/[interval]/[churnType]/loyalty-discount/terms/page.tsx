@@ -9,6 +9,7 @@ import { headers } from 'next/headers';
 import { URLSearchParams } from 'url';
 import { SubplatInterval } from '@fxa/payments/customer';
 import { notFound } from 'next/navigation';
+import { config } from 'apps/payments/next/config';
 
 export default async function ChurnTerms({
   params,
@@ -17,6 +18,10 @@ export default async function ChurnTerms({
   params: ChurnParams;
   searchParams: Record<string, string | string[]> | undefined;
 }) {
+  if (!config.churnInterventionConfig.enabled) {
+    notFound();
+  }
+
   const { locale, interval, churnType, offeringId } = params;
   const acceptLanguage = headers().get('accept-language');
   const l10n = getApp().getL10n(acceptLanguage, locale);
@@ -53,7 +58,7 @@ export default async function ChurnTerms({
       className="flex tablet:items-center justify-center min-h-[calc(100vh_-_4rem)] tablet:min-h-[calc(100vh_-_5rem)]"
       aria-labelledby="loyalty-discount-terms"
     >
-      <div className="max-w-xl min-w-[480px] flex flex-col p-6 pt-10 tablet:bg-white tablet:border tablet:border-grey-200 tablet:opacity-100 tablet:p-8 tablet:rounded-xl tablet:shadow-[0_0px_10px_rgba(0,0,0,0.08)]">
+      <div className="max-w-xl tablet:min-w-[480px] p-6 pt-10 tablet:bg-white tablet:border tablet:border-grey-200 tablet:opacity-100 tablet:p-8 tablet:rounded-xl tablet:shadow-[0_0px_10px_rgba(0,0,0,0.08)]">
         <h1
           id="loyalty-discount-terms"
           className="font-semibold text-xl leading-8"

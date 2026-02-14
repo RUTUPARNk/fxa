@@ -3245,13 +3245,29 @@ module.exports = function (log, config, bounces, statsd) {
         email,
         productName,
         reminderLength: message.reminderLength,
-        planIntervalCount: message.planIntervalCount,
         planInterval: message.planInterval,
+        showTax: message.showTax,
+        invoiceTotalExcludingTax:
+          message.invoiceTotalExcludingTaxInCents &&
+          this._getLocalizedCurrencyString(
+            message.invoiceTotalExcludingTaxInCents,
+            message.invoiceTotalCurrency,
+            message.acceptLanguage
+          ),
+        invoiceTax:
+          message.invoiceTaxInCents &&
+          this._getLocalizedCurrencyString(
+            message.invoiceTaxInCents,
+            message.invoiceTotalCurrency,
+            message.acceptLanguage
+          ),
         invoiceTotal: this._getLocalizedCurrencyString(
           message.invoiceTotalInCents,
           message.invoiceTotalCurrency,
           message.acceptLanguage
         ),
+        discountEnding: message.discountEnding || false,
+        hasDifferentDiscount: message.hasDifferentDiscount || false,
       },
     });
   };

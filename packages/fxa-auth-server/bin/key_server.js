@@ -6,11 +6,10 @@
 
 // Important! Must be required first to get proper hooks in place.
 require('../lib/monitoring');
+const Sentry = require('@sentry/node');
 
 const { config } = require('../config');
-
 const Redis = require('ioredis');
-
 const { CapabilityManager } = require('@fxa/payments/capability');
 const { EligibilityManager } = require('@fxa/payments/eligibility');
 const {
@@ -369,8 +368,8 @@ async function run(config) {
   // mailer lib setup
   const emailSender = new EmailSender(config.smtp, bounces, statsd, log);
   const linkBuilderConfig = {
+    baseUri: config.contentServer.url,
     ...config.smtp,
-    ...config.links,
   };
   const linkBuilder = new EmailLinkBuilder(linkBuilderConfig);
   const fxaMailer = new FxaMailer(
@@ -380,6 +379,13 @@ async function run(config) {
     new NodeRendererBindings()
   );
   Container.set(FxaMailer, fxaMailer);
+
+  const oauthClientInfo = require('../lib/senders/oauth_client_info');
+  const { OAuthClientInfoServiceName } = oauthClientInfo;
+  Container.set({
+    id: OAuthClientInfoServiceName,
+    factory: () => oauthClientInfo(log, config),
+  });
 
   const routes = require('../lib/routes')(
     log,
@@ -417,6 +423,13 @@ async function run(config) {
     await server.start();
     log.info('server.start.1', {
       msg: `running on ${server.info.uri}`,
+    });
+    Sentry.captureMessage('Auth server started', {
+      level: 'info',
+      tags: {
+        service: 'fxa-auth-server',
+        env: config.env,
+      },
     });
   } catch (err) {
     log.error('server.start.1', {
@@ -480,6 +493,7 @@ async function run(config) {
 async function main() {
   try {
     const server = await run(config.getProperties());
+
     process.on('uncaughtException', (err) => {
       server.log.fatal('uncaughtException', err);
       process.exit(8);

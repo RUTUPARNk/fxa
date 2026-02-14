@@ -46,7 +46,7 @@ export type ConfirmSignupCodeBaseIntegration = Pick<
   | 'getService'
   | 'getClientId'
   | 'isFirefoxClientServiceRelay'
-  | 'isFirefoxClientServiceAiWindow'
+  | 'isFirefoxClientServiceSmartWindow'
   | 'isFirefoxNonSync'
   | 'isSync'
   | 'getCmsInfo'
@@ -63,7 +63,7 @@ export type ConfirmSignupCodeOAuthIntegration = Pick<
   | 'isSync'
   | 'getPermissions'
   | 'isFirefoxClientServiceRelay'
-  | 'isFirefoxClientServiceAiWindow'
+  | 'isFirefoxClientServiceSmartWindow'
   | 'isFirefoxNonSync'
   | 'getCmsInfo'
   | 'isFirefoxMobileClient'
@@ -72,7 +72,3 @@ export type ConfirmSignupCodeOAuthIntegration = Pick<
 export type ConfirmSignupCodeIntegration =
   | ConfirmSignupCodeBaseIntegration
   | ConfirmSignupCodeOAuthIntegration;
-
-export interface GetEmailBounceStatusResponse {
-  emailBounceStatus: { hasHardBounce: boolean };
-}

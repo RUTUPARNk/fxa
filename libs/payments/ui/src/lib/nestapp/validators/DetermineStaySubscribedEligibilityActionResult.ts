@@ -78,6 +78,24 @@ export class CmsOfferingContent {
   webIcon!: string;
 }
 
+export class StaySubscribedChurnEligibilityResult {
+  @IsBoolean()
+  isEligible!: boolean;
+
+  @IsString()
+  reason!: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CmsChurnInterventionEntryResult)
+  cmsChurnInterventionEntry!: CmsChurnInterventionEntryResult | null;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CmsOfferingContent)
+  cmsOfferingContent!: CmsOfferingContent | null;
+}
+
 export class StaySubscribedFlowResult {
   @IsString()
   @IsIn(['not_found', 'stay_subscribed'])
@@ -129,23 +147,10 @@ export class StaySubscribedFlowResult {
 }
 
 export class DetermineStaySubscribedEligibilityActionResult {
-  @IsBoolean()
-  isEligible!: boolean;
-
-  @IsString()
-  reason!: string;
-
-  @IsOptional()
   @ValidateNested()
-  @Type(() => CmsChurnInterventionEntryResult)
-  cmsChurnInterventionEntry!: CmsChurnInterventionEntryResult | null;
+  @Type(() => StaySubscribedChurnEligibilityResult)
+  churnStaySubscribedEligibility!: StaySubscribedChurnEligibilityResult;
 
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => CmsOfferingContent)
-  cmsOfferingContent!: CmsOfferingContent | null;
-
-  @IsOptional()
   @ValidateNested()
   @Type(() => StaySubscribedFlowResult)
   staySubscribedContent!: StaySubscribedFlowResult | null;
